@@ -1,0 +1,23 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListerLesZonesData",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": ["arn:aws:s3:::raw-data", "arn:aws:s3:::curated"]
+    },
+    {
+      "Sid": "LireEcrireRawEtCurated",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::raw-data/*", "arn:aws:s3:::curated/*"]
+    },
+    {
+      "Sid": "InterdictionDeModifierLaConfigurationDesBuckets",
+      "Effect": "Deny",
+      "Action": ["s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:PutEncryptionConfiguration", "s3:DeleteBucket"],
+      "Resource": ["arn:aws:s3:::*"]
+    }
+  ]
+}

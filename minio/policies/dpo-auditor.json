@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LectureJournauxAuditEtExportsAnonymises",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject",
+                 "s3:GetObjectRetention", "s3:GetBucketObjectLockConfiguration"],
+      "Resource": ["arn:aws:s3:::audit-logs", "arn:aws:s3:::audit-logs/*",
+                   "arn:aws:s3:::curated", "arn:aws:s3:::curated/*"]
+    },
+    {
+      "Sid": "VoirLaConfigurationDeChiffrement",
+      "Effect": "Allow",
+      "Action": ["s3:GetEncryptionConfiguration", "s3:GetBucketPolicy"],
+      "Resource": ["arn:aws:s3:::*"]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataCorp Secure Lab</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230f766e'/><path d='M10 14v-3a6 6 0 0 1 12 0v3' stroke='white' stroke-width='2.6' fill='none'/><rect x='8' y='14' width='16' height='12' rx='2.5' fill='white'/></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#0f766e"/><path d="M10 14v-3a6 6 0 0 1 12 0v3" stroke="#fff" stroke-width="2.6" fill="none"/><rect x="8" y="14" width="16" height="12" rx="2.5" fill="#fff"/></svg>
+      <div><b>DataCorp Secure</b><small>Lab · chaîne de valeur Data</small></div>
+    </div>
+    <nav id="nav">
+      <a href="#/" data-view="home">Tableau de bord</a>
+      <div class="navlabel">Travaux pratiques</div>
+      <a href="#/tp/tp1" data-view="tp1"><span class="tpnum">1</span>Secrets &amp; chiffrement<em id="prog-tp1"></em></a>
+      <a href="#/tp/tp2" data-view="tp2"><span class="tpnum">2</span>RBAC &amp; anonymisation<em id="prog-tp2"></em></a>
+      <a href="#/tp/tp3" data-view="tp3"><span class="tpnum">3</span>Audit &amp; conformité<em id="prog-tp3"></em></a>
+      <div class="navlabel">Chiffrement en direct</div>
+      <a href="#/crypto/transit" data-view="transit"><span class="dot t"></span>En transit (TLS)</a>
+      <a href="#/crypto/app" data-view="app"><span class="dot a"></span>Applicatif (Vault transit)</a>
+      <a href="#/crypto/rest" data-view="rest"><span class="dot r"></span>Au repos (disques)</a>
+      <div class="navlabel">Outils</div>
+      <a href="#/access" data-view="access">🔑 Accès aux services</a>
+      <a href="#/terminal" data-view="terminal">Terminal toolbox</a>
+    </nav>
+    <div class="sidefoot">
+      <div id="vaultBadge" class="vbadge">Vault : …</div>
+      <label class="toggle"><input type="checkbox" id="trainer"> Mode formateur (corrigés)</label>
+    </div>
+  </aside>
+  <main id="view"></main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

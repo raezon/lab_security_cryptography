@@ -1,0 +1,247 @@
+# =============================================================================
+#  DataCorp Secure — Projet fil rouge "Sécurité de la chaîne de valeur Data"
+#  Socle commun aux TP1 (secrets & chiffrement), TP2 (RBAC & masquage),
+#  TP3 (audit & conformité).
+#
+#  Démarrage :
+#     ./scripts/generate-env.sh          # crée .env avec des secrets aléatoires
+#     docker compose up -d --build
+#     docker compose ps
+#     docker compose exec toolbox bash   # poste de travail de l'apprenant
+#
+#  Flux :  producteur ──AMQPS──▶ RabbitMQ ──AMQPS──▶ consommateur
+#                                                      │  ├─TLS─▶ Vault (transit, creds dynamiques)
+#                                                      │  ├─TLS─▶ PostgreSQL (finance.transactions)
+#                                                      │  └─TLS─▶ MinIO (raw-data, chiffré SSE-S3)
+#          MinIO ──webhook d'audit──▶ audit-sink (SIEM simulé)
+# =============================================================================
+
+name: datacorp
+
+x-toolbox-build: &toolbox-build
+  context: ./toolbox
+
+services:
+
+  # ---------------------------------------------------------------- PKI interne
+  # Génère une CA et les certificats serveurs de chaque service, puis s'arrête.
+  certs-init:
+    build: *toolbox-build
+    image: datacorp/toolbox:1.0
+    container_name: dc-certs-init
+    entrypoint: ["bash", "/lab/scripts/pki/generate-certs.sh"]
+    volumes:
+      - certs:/certs
+      - ./scripts:/lab/scripts:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------- PostgreSQL 16 + pgAudit
+  postgres:
+    build: ./postgres
+    image: datacorp/postgres-pgaudit:16
+    container_name: dc-postgres
+    hostname: postgres
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?à définir dans .env}
+      POSTGRES_DB: datacorp
+      POSTGRES_INITDB_ARGS: "--auth-local=peer --auth-host=scram-sha-256"
+      VAULT_DB_ADMIN_PASSWORD: ${VAULT_DB_ADMIN_PASSWORD:?à définir dans .env}
+      LEGACY_ETL_PASSWORD: ${LEGACY_ETL_PASSWORD:?à définir dans .env}
+      TZ: Europe/Paris
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - pg-logs:/var/log/postgresql
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - certs:/certs:ro
+    networks: [net-data]
+    depends_on:
+      certs-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d datacorp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- HashiCorp Vault
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: dc-vault
+    hostname: vault
+    command: ["server"]
+    cap_add: [IPC_LOCK]
+    environment:
+      VAULT_ADDR: https://127.0.0.1:8200
+      VAULT_CACERT: /certs/vault/ca.crt
+      SSL_CERT_FILE: /certs/vault/ca.crt     # Vault fait confiance à la CA du lab (PostgreSQL, RabbitMQ)
+      SKIP_CHOWN: "true"
+    volumes:
+      - ./vault/config:/vault/config:ro
+      - vault-data:/vault/file
+      - vault-logs:/vault/logs
+      - certs:/certs:ro
+    ports:
+      - "127.0.0.1:8200:8200"                # UI : https://localhost:8200
+    networks: [net-data, net-broker]
+    depends_on:
+      certs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- MinIO (stockage objet S3)
+  minio:
+    # minio/minio n'est plus publié sur Docker Hub : même build (commit 0d7408f) via bitnamilegacy
+    image: bitnamilegacy/minio:2025.4.22
+    container_name: dc-minio
+    hostname: minio
+    user: "0:0"                              # lit /certs/minio (propriétaire root, 750)
+    entrypoint: ["/opt/bitnami/minio/bin/minio"]
+    command: ["server", "/data", "--console-address", ":9001", "--certs-dir", "/certs/minio"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?à définir dans .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?à définir dans .env}
+      MINIO_KMS_SECRET_KEY: ${MINIO_KMS_SECRET_KEY:?à définir dans .env}   # chiffrement au repos SSE-S3
+      TZ: Europe/Paris
+    volumes:
+      - minio-data:/data
+      - certs:/certs:ro
+    ports:
+      - "127.0.0.1:9000:9000"                # API S3 (HTTPS)
+      - "127.0.0.1:9001:9001"                # Console : https://localhost:9001
+    networks: [net-data]
+    depends_on:
+      certs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- RabbitMQ (broker d'ingestion)
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: dc-rabbitmq
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:?à définir dans .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:?à définir dans .env}
+      RABBITMQ_DEFAULT_VHOST: datacorp
+    volumes:
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-datacorp.conf:ro
+      - rabbitmq-data:/var/lib/rabbitmq
+      - certs:/certs:ro
+    ports:
+      - "127.0.0.1:15671:15671"              # Management : https://localhost:15671
+    networks: [net-broker]
+    depends_on:
+      certs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Collecteur d'audit (SIEM simulé)
+  audit-sink:
+    build: *toolbox-build
+    image: datacorp/toolbox:1.0
+    container_name: dc-audit-sink
+    hostname: audit-sink
+    entrypoint: ["python3", "-u", "/lab/audit-sink/sink.py"]
+    environment:
+      AUDIT_TOKEN: ${AUDIT_TOKEN:?à définir dans .env}
+      AUDIT_DIR: /logs/minio
+    volumes:
+      - ./audit-sink:/lab/audit-sink:ro
+      - minio-audit:/logs/minio
+    networks: [net-data]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Poste de travail apprenant
+  toolbox:
+    build: *toolbox-build
+    image: datacorp/toolbox:1.0
+    container_name: dc-toolbox
+    hostname: toolbox
+    environment:
+      PGHOST: postgres
+      PGDATABASE: datacorp
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /certs/ca.crt
+      VAULT_ADDR: https://vault:8200
+      VAULT_CACERT: /certs/ca.crt
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_VHOST: datacorp
+      MINIO_URL: https://minio:9000
+      TZ: Europe/Paris
+    volumes:
+      - ./scripts:/lab/scripts
+      - ./pipeline:/lab/pipeline
+      - ./vault/policies:/lab/vault-policies:ro
+      - ./minio/policies:/lab/minio-policies:ro
+      - ./work:/lab/work
+      - certs:/certs:ro
+      - pg-logs:/logs/postgres:ro
+      - vault-logs:/logs/vault:ro
+      - minio-audit:/logs/minio:ro
+    networks: [net-data, net-broker]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_started
+      minio:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Console web des TP (Go)
+  # http://localhost:8085 — liste les étapes des TP1/2/3, les exécute dans la toolbox
+  # et montre en direct le chiffrement en transit, applicatif et au repos.
+  # ⚠ Accès au socket Docker (exec dans dc-toolbox, lecture des disques) : lab local uniquement.
+  lab-console:
+    build: ./webapp
+    image: datacorp/lab-console:1.0
+    container_name: dc-lab-console
+    hostname: lab-console
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      VAULT_DB_ADMIN_PASSWORD: ${VAULT_DB_ADMIN_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER}
+      RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD}
+      AUDIT_TOKEN: ${AUDIT_TOKEN}
+      TZ: Europe/Paris
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - certs:/certs:ro
+      - ./tp/images:/lab/tp/images:ro
+      - console-data:/data
+    ports:
+      - "127.0.0.1:8085:8085"
+    networks: [net-data, net-broker]
+    depends_on:
+      toolbox:
+        condition: service_started
+    restart: unless-stopped
+
+# ---------------------------------------------------------------- Segmentation réseau
+# net-data   : zone des données (PostgreSQL, MinIO) + Vault + collecteur d'audit
+# net-broker : zone d'ingestion (RabbitMQ) — RabbitMQ n'a AUCUNE route vers les bases
+networks:
+  net-data:
+    name: datacorp-net-data
+  net-broker:
+    name: datacorp-net-broker
+
+volumes:
+  certs:
+  pg-data:
+  pg-logs:
+  vault-data:
+  vault-logs:
+  minio-data:
+  minio-audit:
+  rabbitmq-data:
+  console-data:

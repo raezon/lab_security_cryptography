@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DeposerLesJournauxScelles",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": ["arn:aws:s3:::audit-logs", "arn:aws:s3:::audit-logs/*"]
+    },
+    {
+      "Sid": "JamaisDeSuppressionNiDeModificationDeRetention",
+      "Effect": "Deny",
+      "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion", "s3:PutObjectRetention",
+                 "s3:BypassGovernanceRetention", "s3:PutBucketObjectLockConfiguration"],
+      "Resource": ["arn:aws:s3:::audit-logs", "arn:aws:s3:::audit-logs/*"]
+    }
+  ]
+}
