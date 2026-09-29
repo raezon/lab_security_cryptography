@@ -11,7 +11,11 @@ Aucun secret dans ce fichier : tout est injecté par with-vault-creds.sh
   - VAULT_TOKEN                       : jeton AppRole (droit transit/encrypt uniquement)
   - MC_HOST_dcingest                  : compte de service MinIO
 
-Usage : with-vault-creds.sh python3 /lab/pipeline/consumer.py [max_messages]
+Usage : with-vault-creds.sh python3 /lab/pipeline/consumer.py [max_messages] [délai_s] [taille_lot]
+  délai_s    : temps de « traitement » simulé par message (mode lent). 0 par défaut.
+  taille_lot : nombre de messages écrits puis acquittés ensemble. Par défaut tout
+               d'un coup ; en mode lent, des petits lots rendent visibles Ready,
+               Unacked, Deliver et Consumer ack dans RabbitMQ Management.
 """
 import base64
 import json
@@ -49,27 +53,8 @@ def rabbit():
         ssl_options=pika.SSLOptions(ctx, server_hostname=host)))
 
 
-def main():
-    max_msg = int(sys.argv[1]) if len(sys.argv) > 1 else 500
-    conn = rabbit()
-    ch = conn.channel()
-    ch.queue_declare(queue=QUEUE, durable=True)
-
-    batch, last_tag = [], None
-    for method, _props, body in ch.consume(QUEUE, inactivity_timeout=3):
-        if method is None:          # file vide depuis 3 s
-            break
-        batch.append(json.loads(body))
-        last_tag = method.delivery_tag
-        if len(batch) >= max_msg:
-            break
-    ch.cancel()
-
-    if not batch:
-        print("[consommateur] aucune transaction en attente")
-        conn.close()
-        return
-
+def ingest(batch, seq):
+    """Chiffre, insère en base puis archive un lot ; renvoie la clé MinIO."""
     # 1. Chiffrement applicatif : l'IBAN en clair ne quitte jamais ce processus
     for tx, cipher in zip(batch, vault_encrypt([t["iban_contrepartie"] for t in batch])):
         tx["iban_contrepartie"] = cipher
@@ -87,19 +72,57 @@ def main():
 
     # 3. Archivage du lot brut (IBAN déjà chiffrés) dans MinIO raw-data
     now = datetime.now(timezone.utc)
-    key = f"raw-data/transactions/{now:%Y/%m/%d}/lot-{now:%H%M%S}.json"
+    key = f"raw-data/transactions/{now:%Y/%m/%d}/lot-{now:%H%M%S}" + (f"-{seq:02d}" if seq else "") + ".json"
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(batch, f, ensure_ascii=False, indent=1)
         tmp = f.name
     try:
-        subprocess.run(["mc", "cp", "--quiet", tmp, f"dcingest/{key}"], check=True)
+        subprocess.run(["mc", "cp", "--quiet", tmp, f"dcingest/{key}"], check=True, stdout=subprocess.DEVNULL)
     finally:
         os.unlink(tmp)
+    return key
 
-    # 4. Acquittement APRÈS écriture durable : sémantique "au moins une fois"
-    ch.basic_ack(delivery_tag=last_tag, multiple=True)
+
+def main():
+    max_msg = int(sys.argv[1]) if len(sys.argv) > 1 else 500
+    delay = float(sys.argv[2]) if len(sys.argv) > 2 else 0
+    lot = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    conn = rabbit()
+    ch = conn.channel()
+    ch.queue_declare(queue=QUEUE, durable=True)
+    if lot:
+        # Le broker ne remet pas plus de `lot` messages non acquittés : le reste attend en Ready.
+        ch.basic_qos(prefetch_count=lot)
+
+    batch, last_tag, total, seq, key = [], None, 0, 0, None
+    for method, _props, body in ch.consume(QUEUE, inactivity_timeout=3):
+        if method is None:          # file vide depuis 3 s
+            break
+        batch.append(json.loads(body))
+        last_tag = method.delivery_tag
+        total += 1
+        if delay:
+            conn.sleep(delay)       # « traitement » lent : le message reste Unacked
+        if lot and len(batch) >= lot:
+            seq += 1
+            key = ingest(batch, seq)
+            # 4. Acquittement APRÈS écriture durable : sémantique "au moins une fois"
+            ch.basic_ack(delivery_tag=last_tag, multiple=True)
+            print(f"[consommateur] lot {seq} : {len(batch)} transactions ingérées et acquittées (ack)", flush=True)
+            batch = []
+        if total >= max_msg:
+            break
+    ch.cancel()
+
+    if batch:
+        key = ingest(batch, seq + 1 if lot else 0)
+        # 4. Acquittement APRÈS écriture durable : sémantique "au moins une fois"
+        ch.basic_ack(delivery_tag=last_tag, multiple=True)
     conn.close()
-    print(f"[consommateur] {len(batch)} transactions ingérées -> PostgreSQL + minio/{key}")
+    if not total:
+        print("[consommateur] aucune transaction en attente")
+        return
+    print(f"[consommateur] {total} transactions ingérées -> PostgreSQL + minio/{key}", flush=True)
 
 
 if __name__ == "__main__":

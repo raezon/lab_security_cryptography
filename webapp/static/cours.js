@@ -421,7 +421,9 @@ function coursRabbit(view) {
   <div class="card warnbox" style="margin-top:14px">⚠️ <b>À retenir :</b> RabbitMQ chiffre le <b>voyage</b> des messages (TLS) mais <b>pas leur stockage</b> dans la file. Un message en attente contient l'IBAN en clair sur le disque du serveur RabbitMQ.
     C'est pour ça que DataCorp fait chiffrer l'IBAN par Vault <b>dès le consommateur</b>, et que RabbitMQ n'a aucune route vers le réseau des données.</div>
   <h2>🖱️ Faire la même chose avec l'interface graphique</h2>
-  <p class="small muted">Ouvre <a href="${esc(INFO.rabbitmq_url || "#")}" target="_blank" rel="noopener">RabbitMQ Management ↗</a> et suis les captures (clic = agrandir). Lance d'abord le pipeline (bouton « pipeline (50 tx) » du <a href="#/terminal">terminal</a>) pour avoir des messages.</p>
+  <p class="small muted">Ouvre <a href="${esc(INFO.rabbitmq_url || "#")}" target="_blank" rel="noopener">RabbitMQ Management ↗</a> et suis les captures (clic = agrandir). Le bouton « pipeline (50 tx) » est trop rapide pour l'interface, qui ne mesure que <b>toutes les 5 s</b> : dans le <a href="#/terminal">terminal</a>, utilise plutôt
+    <b>📮 publier seulement</b> (les messages restent en <i>Ready</i>, tu peux les lire avec « Get messages »), puis <b>consommer la file</b>,
+    ou <b>🐢 pipeline lent</b> (~45 s de trafic : <i>Publish</i>, <i>Deliver</i>, <i>Unacked</i>, <i>Consumer ack</i> bougent en direct).</p>
   <div class="shots">
     ${shot("rabbitmq-1-connexion.png", "1 · Se connecter", ["Utilisateur et mot de passe <b>RABBITMQ_ADMIN_USER / RABBITMQ_ADMIN_PASSWORD</b> (bouton <a href='#' data-creds>🔑</a>).", "Clique sur <b>Login</b>."])}
     ${shot("rabbitmq-2-apercu.png", "2 · La vue d'ensemble", ["Onglet <b>Overview</b> : messages en file, débit, nœud.", "Tout en bas, <b>Ports and contexts</b> : <code>amqp/ssl 5671</code> et <code>https 15671</code>, aucun port en clair."])}

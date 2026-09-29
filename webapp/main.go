@@ -127,6 +127,10 @@ func (s *stream) Write(p []byte) (int, error) {
 // Restaure la session de la toolbox si le conteneur a été recréé ou Vault redémarré :
 // l'état (~/.vault-token, alias mc) vit dans la couche inscriptible du conteneur.
 const sessionRestore = `export PATH=/lab/scripts/bin:$PATH
+# vault-init.json vidé par un « vault operator init > … » relancé : on remet la sauvegarde
+if ! jq -e .root_token /lab/work/vault-init.json >/dev/null 2>&1 && jq -e .root_token /lab/work/.vault-init.bak.json >/dev/null 2>&1; then
+  cp /lab/work/.vault-init.bak.json /lab/work/vault-init.json && chmod 600 /lab/work/vault-init.json && echo "[console] work/vault-init.json restauré depuis la sauvegarde"
+fi
 if [ -r /lab/work/vault-init.json ] && ! vault token lookup >/dev/null 2>&1; then
   [ "$(vault status -format=json 2>/dev/null | jq -r .sealed)" = true ] && /lab/scripts/vault-unseal.sh >/dev/null && echo "[console] Vault descellé (redémarrage détecté)"
   vault login -no-print "$(jq -r .root_token /lab/work/vault-init.json)" && echo "[console] session Vault restaurée (toolbox recréée)"
@@ -269,7 +273,7 @@ func (c *tokenCache) get(ctx context.Context) (string, error) {
 		return c.tok, nil
 	}
 	out, _, err := docker.ExecOutput(ctx, toolbox, nil,
-		`cat /root/.vault-token 2>/dev/null || jq -r .root_token /lab/work/vault-init.json 2>/dev/null`)
+		`cat /root/.vault-token 2>/dev/null || jq -r .root_token /lab/work/vault-init.json /lab/work/.vault-init.bak.json 2>/dev/null | grep -vm1 null`)
 	tok := strings.TrimSpace(out)
 	if err != nil || tok == "" || tok == "null" {
 		return "", fmt.Errorf("pas de session Vault : exécutez d'abord TP1 · étape 2 (ouvrir le coffre)")

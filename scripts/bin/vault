@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  Enveloppe de « vault » (placée avant /usr/local/bin dans le PATH).
+#  Protège work/vault-init.json : « vault operator init … > vault-init.json »
+#  vide le fichier AVANT l'exécution (redirection du shell). Si Vault est déjà
+#  initialisé, on renvoie la copie de sauvegarde pour que le fichier soit recréé
+#  à l'identique au lieu de perdre les clés et le jeton root.
+# =============================================================================
+REAL=/usr/local/bin/vault
+BAK=/lab/work/.vault-init.bak.json
+if [ "$1" = operator ] && [ "$2" = init ]; then
+  shift 2
+  for a in "$@"; do case "$a" in -h|-help|--help|-status) exec "$REAL" operator init "$@";; esac; done
+  if [ "$("$REAL" status -format=json 2>/dev/null | jq -r .initialized)" = true ]; then
+    if jq -e .root_token "$BAK" >/dev/null 2>&1; then
+      echo "[lab] Vault est déjà initialisé : impossible de le refaire. Clés d'origine restaurées depuis la sauvegarde (voir : vault-cles)." >&2
+      cat "$BAK"; exit 0
+    fi
+    exec "$REAL" operator init "$@"
+  fi
+  out=$("$REAL" operator init "$@") || { rc=$?; printf '%s\n' "$out"; exit $rc; }
+  if jq -e .root_token <<<"$out" >/dev/null 2>&1; then
+    ( umask 077; printf '%s\n' "$out" > "$BAK" )
+  fi
+  printf '%s\n' "$out"; exit 0
+fi
+exec "$REAL" "$@"

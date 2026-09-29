@@ -6,7 +6,9 @@ transactions dans la file RabbitMQ "ingest.transactions".
 Identifiants : RABBITMQ_USER / RABBITMQ_PASSWORD (fournis dynamiquement par
 Vault via /lab/scripts/with-vault-creds.sh). Connexion AMQPS (TLS) uniquement.
 
-Usage : with-vault-creds.sh python3 /lab/pipeline/producer.py [nombre]
+Usage : with-vault-creds.sh python3 /lab/pipeline/producer.py [nombre] [délai_s]
+  délai_s : pause entre deux messages (mode lent, pour suivre les débits dans
+            RabbitMQ Management qui ne mesure que toutes les 5 s). 0 par défaut.
 """
 import json
 import os
@@ -44,6 +46,7 @@ def fake_transaction(i, run_id):
 
 def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 50
+    delay = float(sys.argv[2]) if len(sys.argv) > 2 else 0
     run_id = datetime.now().strftime("%Y%m%d%H%M%S")
     conn = connect()
     ch = conn.channel()
@@ -52,8 +55,12 @@ def main():
         ch.basic_publish(exchange="", routing_key=QUEUE,
                          body=json.dumps(fake_transaction(i, run_id)),
                          properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"))
+        if delay:
+            if i % 10 == 0:
+                print(f"[producteur] {i}/{n} publiées", flush=True)
+            conn.sleep(delay)   # sleep() de pika : la connexion reste vivante (heartbeats)
     conn.close()
-    print(f"[producteur] {n} transactions publiées dans '{QUEUE}' (lot {run_id})")
+    print(f"[producteur] {n} transactions publiées dans '{QUEUE}' (lot {run_id})", flush=True)
 
 
 if __name__ == "__main__":
