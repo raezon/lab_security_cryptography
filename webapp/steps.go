@@ -1,11 +1,17 @@
 package main
 
 // Catalogue des étapes des trois énoncés (tp/TP1…, TP2…, TP3…).
-//   Doc    : les commandes telles qu'écrites dans l'énoncé (affichées) ;
-//   Run    : leur équivalent NON interactif, exécuté dans dc-toolbox
-//            (les « read -rsp » et les copier-coller sont remplacés par
-//            les variables du .env transmises à l'exec) ;
+//   Doc    : les commandes telles qu'écrites dans l'énoncé (à taper dans le Terminal) ;
+//   Run    : leur équivalent NON interactif, exécuté dans la toolbox par « ▶ Exécuter »
+//            (les <valeurs à recopier> sont lues automatiquement) ;
 //   Expect : expressions régulières qui valident le « ✅ Vérifier ».
+//
+// Commandes simplifiées de la toolbox (scripts/bin, dans le PATH) :
+//   sql "…"            requête en administrateur (mot de passe lu dans Vault)
+//   sql-as bruno "…"   requête en tant qu'une personne du lab
+//   vault-cles         clés d'ouverture + jeton root de Vault
+//   logs audit|echecs|minio|vault|tout    lecture des journaux (TP3)
+//   effacer-preuve     tentative de suppression d'une archive WORM (TP3)
 
 type Step struct {
 	ID     string   `json:"id"`
@@ -33,10 +39,11 @@ type TP struct {
 	Questions []string `json:"questions"`
 	GRCTitle  string   `json:"grcTitle"`
 	GRC       []string `json:"grc"`
-	Answers   []string `json:"answers"`
+	Answers   []string `json:"answers,omitempty"`
 }
 
-const asFn = `as() { u=$1; shift; PGPASSWORD="$(vault kv get -field=password kv/datacorp/users/pg/$u)" psql -U "$u" -c "$*"; }`
+// Ancienne fonction des énoncés (compatibilité) : sql-as la remplace.
+const asFn = `as() { sql-as "$@"; }`
 
 var catalog = []TP{
 	{
@@ -54,35 +61,41 @@ var catalog = []TP{
 		Steps: []Step{
 			{
 				ID: "tp1-1", Num: 1, Title: "Constater le problème", Role: "Samira (Data Security Engineer)",
-				Why:    "On ne corrige bien que ce qu'on a mesuré : trouvons les secrets exposés.",
+				Why:    "On ne corrige bien que ce qu'on a mesuré : trouvons les mots de passe écrits en clair.",
 				Crypto: "Aucune protection : secrets en clair dans un script, export IBAN en clair",
-				Doc: `cat /lab/scripts/legacy/ingest_legacy.sh                  # lisez les 20 premières lignes
-grep -nE "PASS|SECRET|KEY" /lab/scripts/legacy/ingest_legacy.sh
-bash /lab/scripts/legacy/ingest_legacy.sh                 # le vieux mot de passe marche encore !`,
-				Verify: "Vous listez 3 secrets (PostgreSQL, MinIO, RabbitMQ) et le fichier /tmp/export_rh_*.csv contient des IBAN en clair.",
+				Doc: `cat /lab/scripts/legacy/ingest_legacy.sh                   # lisez le vieux script
+grep -n "PASS\|SECRET\|KEY" /lab/scripts/legacy/ingest_legacy.sh   # les mots de passe en clair
+bash /lab/scripts/legacy/ingest_legacy.sh                  # il marche encore !
+head -3 /tmp/export_rh_*.csv                               # le fichier exporté : IBAN lisibles`,
+				Verify: "Vous trouvez 3 mots de passe (PostgreSQL, MinIO, RabbitMQ) et le fichier exporté contient des IBAN en clair (FR76…).",
 				Run: []string{
 					`sed -n '12,24p' /lab/scripts/legacy/ingest_legacy.sh`,
-					`grep -nE "PASS|SECRET|KEY" /lab/scripts/legacy/ingest_legacy.sh`,
+					`grep -n "PASS\|SECRET\|KEY" /lab/scripts/legacy/ingest_legacy.sh`,
 					`bash /lab/scripts/legacy/ingest_legacy.sh`,
-					`head -4 /tmp/export_rh_*.csv`,
+					`head -3 /tmp/export_rh_*.csv`,
 				},
 				Expect: []string{`DB_PASS="DataCorp2019!"`, `lignes exportées`, `FR76\d{23}`},
 			},
 			{
 				ID: "tp1-2", Num: 2, Title: "Ouvrir le coffre-fort", Role: "Samira",
-				Why:    "Vault est fermé. On le découpe en 5 clés (Shamir) et il en faut 3 pour l'ouvrir : personne ne peut l'ouvrir seul.",
+				Why:    "Vault démarre fermé. À l'ouverture, il fabrique 5 clés : il en faut 3 pour l'ouvrir. Personne ne peut donc l'ouvrir seul.",
 				Crypto: "Chiffrement au repos du stockage Vault (barrière AES-256-GCM), clé maître partagée par Shamir 3/5",
-				Doc: `vault operator init -key-shares=5 -key-threshold=3 -format=json > /lab/work/vault-init.json
-jq -r '.unseal_keys_b64[]' /lab/work/vault-init.json      # les 5 clés
-vault operator unseal        # collez la clé n°1   (répétez 3 fois, une clé différente à chaque fois)
-vault login "$(jq -r .root_token /lab/work/vault-init.json)"
-vault audit enable file file_path=/vault/logs/audit.log   # on trace tout, dès le début`,
+				Doc: `vault status                                       # Initialized false, Sealed true : coffre neuf et fermé
+vault operator init -format=json > /lab/work/vault-init.json   # crée 5 clés + 1 jeton administrateur
+vault-cles                                         # affiche les 5 clés et le jeton root
+vault operator unseal <clé 1>                      # 1re clé…
+vault operator unseal <clé 2>                      # 2e clé…
+vault operator unseal <clé 3>                      # 3e clé : le coffre s'ouvre
+vault login <jeton root>                           # on se connecte en administrateur
+vault audit enable file file_path=/vault/logs/audit.log   # Vault note tout ce qu'on lui demande
+vault status                                       # Sealed false`,
 				Verify: "vault status affiche Sealed false.",
 				Run: []string{
-					`[ "$(vault status -format=json | jq -r .initialized)" = true ] || { vault operator init -key-shares=5 -key-threshold=3 -format=json > /lab/work/vault-init.json && chmod 600 /lab/work/vault-init.json && echo "[init] Vault initialisé"; }`,
-					`jq -r '.unseal_keys_b64[]' /lab/work/vault-init.json`,
+					`vault status | grep -E "Initialized|Sealed"`,
+					`[ "$(vault status -format=json | jq -r .initialized)" = true ] && echo "[init] Vault déjà initialisé" || { vault operator init -format=json > /lab/work/vault-init.json && chmod 600 /lab/work/vault-init.json && echo "[init] Vault initialisé : 5 clés, seuil 3"; }`,
+					`vault-cles`,
 					`for i in 0 1 2; do vault operator unseal "$(jq -r ".unseal_keys_b64[$i]" /lab/work/vault-init.json)" | grep -E "^(Sealed|Unseal Progress)"; done`,
-					`vault login -no-print "$(jq -r .root_token /lab/work/vault-init.json)" && echo "[login] jeton root enregistré dans ~/.vault-token"`,
+					`vault login -no-print "$(jq -r .root_token /lab/work/vault-init.json)" && echo "[login] connecté avec le jeton root"`,
 					`vault audit list 2>/dev/null | grep -q '^file/' || vault audit enable file file_path=/vault/logs/audit.log; vault audit list`,
 					`vault status`,
 				},
@@ -90,76 +103,59 @@ vault audit enable file file_path=/vault/logs/audit.log   # on trace tout, dès 
 			},
 			{
 				ID: "tp1-3", Num: 3, Title: "Ranger les mots de passe administrateur", Role: "Samira",
-				Why:    "Les comptes « super-admin » ne doivent plus traîner dans des fichiers. On les met sous séquestre dans Vault (compte « bris de glace »).",
+				Why:    "Les mots de passe « super-admin » ne doivent plus traîner dans des fichiers : on les range dans le coffre (compte « bris de glace »).",
 				Crypto: "Secrets statiques chiffrés au repos dans Vault KV v2",
-				Doc: `vault secrets enable -path=kv kv-v2
-for s in postgres minio rabbitmq; do
-  read -rp "$s — utilisateur : " U; read -rsp "$s — mot de passe : " PW; echo
-  vault kv put kv/datacorp/break-glass/$s username="$U" password="$PW"
-done
-/lab/scripts/pg-admin.sh -c "SELECT current_user"          # ce script lit le mot de passe dans Vault`,
-				Verify: "vault kv get kv/datacorp/break-glass/postgres renvoie le secret, et pg-admin.sh se connecte.",
+				Doc: `vault secrets enable -path=kv kv-v2                # ouvre un tiroir « kv » pour ranger des secrets
+vault kv put kv/datacorp/break-glass/postgres username=postgres password=$POSTGRES_PASSWORD
+vault kv put kv/datacorp/break-glass/minio    username=$MINIO_ROOT_USER password=$MINIO_ROOT_PASSWORD
+vault kv put kv/datacorp/break-glass/rabbitmq username=$RABBITMQ_ADMIN_USER password=$RABBITMQ_ADMIN_PASSWORD
+vault kv get kv/datacorp/break-glass/postgres      # on relit le secret rangé
+sql "SELECT current_user"                          # « sql » lit le mot de passe dans Vault`,
+				Verify: "vault kv get renvoie le secret, et sql \"SELECT current_user\" répond postgres.",
 				Run: []string{
 					`vault secrets list | grep -q '^kv/' || vault secrets enable -path=kv kv-v2`,
 					`vault kv put kv/datacorp/break-glass/postgres username=postgres password="$POSTGRES_PASSWORD" >/dev/null && echo "[kv] postgres rangé"
 vault kv put kv/datacorp/break-glass/minio username="$MINIO_ROOT_USER" password="$MINIO_ROOT_PASSWORD" >/dev/null && echo "[kv] minio rangé"
 vault kv put kv/datacorp/break-glass/rabbitmq username="$RABBITMQ_ADMIN_USER" password="$RABBITMQ_ADMIN_PASSWORD" >/dev/null && echo "[kv] rabbitmq rangé"`,
 					`vault kv get -format=json kv/datacorp/break-glass/postgres | jq '{path: "kv/datacorp/break-glass/postgres", version: .data.metadata.version, username: .data.data.username, password: "•••• (masqué par la console)"}'`,
-					`/lab/scripts/pg-admin.sh -c "SELECT current_user"`,
+					`sql "SELECT current_user"`,
 				},
 				Expect: []string{`"username": "postgres"`, `(?m)^\s*postgres\s*$`},
 			},
 			{
 				ID: "tp1-4", Num: 4, Title: "Des mots de passe temporaires pour PostgreSQL", Role: "Alice (Data Engineer)",
-				Why:    "Au lieu d'un mot de passe éternel, Vault crée un compte valable 1 heure qui peut seulement insérer des transactions.",
+				Why:    "Au lieu d'un mot de passe éternel, Vault crée à la demande un compte valable 1 heure, qui peut seulement ajouter des transactions.",
 				Figure: "fig_tp1_secret_dynamique.png",
 				Crypto: "Secret dynamique (TTL 1 h) + connexion Vault → PostgreSQL en TLS verify-full",
-				Doc: `vault secrets enable database
-read -rsp "VAULT_DB_ADMIN_PASSWORD (voir .env) : " VPW; echo
-vault write database/config/datacorp plugin_name=postgresql-database-plugin \
-  connection_url="postgresql://{{username}}:{{password}}@postgres:5432/datacorp?sslmode=verify-full&sslrootcert=/certs/vault/ca.crt" \
-  allowed_roles="*" username="vault_admin" password="$VPW" password_authentication="scram-sha-256"
-vault write -f database/rotate-root/datacorp               # plus aucun humain ne connaît ce mot de passe
-vault write database/roles/app-ingest db_name=datacorp default_ttl=1h max_ttl=4h \
-  creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}' IN ROLE app_ingest;" \
-  revocation_statements="REVOKE app_ingest FROM \"{{name}}\"; DROP ROLE IF EXISTS \"{{name}}\";"
-vault read database/creds/app-ingest                       # un compte tout neuf : v-root-app-inge-…
-
-psql -U <utilisateur> -c "SELECT count(*) FROM finance.transactions"   # refusé : il ne peut pas lire
-vault lease revoke <lease_id>                                          # on le révoque…
-psql -U <utilisateur> -c "SELECT 1"                                    # …il n'existe plus`,
-				Verify: "La lecture est refusée, puis la connexion échoue après la révocation.",
+				Doc: `cat /lab/scripts/setup/tp1-db-dynamique.sh        # lisez : ce que le script configure dans Vault
+/lab/scripts/setup/tp1-db-dynamique.sh            # Vault sait maintenant créer des comptes PostgreSQL
+vault read database/creds/app-ingest              # un compte tout neuf : notez username, password, lease_id
+PGPASSWORD=<password> psql -U <username> -c "SELECT count(*) FROM finance.transactions"   # refusé : il ne peut qu'écrire
+vault lease revoke <lease_id>                     # on supprime le compte tout de suite
+PGPASSWORD=<password> psql -U <username> -c "SELECT 1"                                   # échec : il n'existe plus`,
+				Verify: "La lecture est refusée (permission denied), puis la connexion échoue après la révocation.",
 				Run: []string{
-					`vault secrets list | grep -q '^database/' || vault secrets enable database`,
-					`if vault read database/config/datacorp >/dev/null 2>&1; then echo "[db] connexion déjà configurée (mot de passe racine déjà roté)"; else
-  vault write database/config/datacorp plugin_name=postgresql-database-plugin \
-    connection_url="postgresql://{{username}}:{{password}}@postgres:5432/datacorp?sslmode=verify-full&sslrootcert=/certs/vault/ca.crt" \
-    allowed_roles="*" username="vault_admin" password="$VAULT_DB_ADMIN_PASSWORD" password_authentication="scram-sha-256"
-  vault write -f database/rotate-root/datacorp
-fi`,
-					`vault write database/roles/app-ingest db_name=datacorp default_ttl=1h max_ttl=4h \
-  creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}' IN ROLE app_ingest;" \
-  revocation_statements="REVOKE app_ingest FROM \"{{name}}\"; DROP ROLE IF EXISTS \"{{name}}\";"`,
+					`sed -n '2,9p' /lab/scripts/setup/tp1-db-dynamique.sh`,
+					`/lab/scripts/setup/tp1-db-dynamique.sh`,
 					`CRED=$(vault read -format=json database/creds/app-ingest); U=$(jq -r .data.username <<<"$CRED"); P=$(jq -r .data.password <<<"$CRED"); L=$(jq -r .lease_id <<<"$CRED")
-echo "utilisateur = $U"; echo "lease_id    = $L"; echo "durée       = $(jq -r .lease_duration <<<"$CRED") s"`,
-					`PGPASSWORD="$P" psql -U "$U" -c "SELECT count(*) FROM finance.transactions"   # refusé : il ne peut pas lire`,
+echo "username = $U"; echo "password = ${P:0:4}…"; echo "lease_id = $L"; echo "durée    = $(jq -r .lease_duration <<<"$CRED") s"`,
+					`PGPASSWORD="$P" psql -U "$U" -c "SELECT count(*) FROM finance.transactions"`,
 					`vault lease revoke "$L"`,
-					`PGPASSWORD="$P" psql -U "$U" -c "SELECT 1"   # le compte n'existe plus`,
+					`PGPASSWORD="$P" psql -U "$U" -c "SELECT 1"`,
 				},
 				Expect: []string{`permission denied for table transactions`, `password authentication failed`},
 			},
 			{
 				ID: "tp1-5", Num: 5, Title: "Chiffrer les IBAN", Role: "Alice",
-				Why:    "Si quelqu'un vole une sauvegarde de la base, il ne doit lire que du charabia. Vault garde la clé : la base ne contient que des données chiffrées.",
+				Why:    "Si quelqu'un vole une copie de la base, il ne doit lire que du charabia. La clé reste dans Vault, la base ne garde que le texte chiffré.",
 				Figure: "fig_tp1_matrice_risque.png",
 				Crypto: "Chiffrement applicatif (Vault transit, AES-256-GCM96) : la colonne est chiffrée AVANT d'arriver en base",
-				Doc: `vault secrets enable transit
-vault write -f transit/keys/datacorp-pii                   # clé AES-256 qui ne sort jamais de Vault
-vault write transit/encrypt/datacorp-pii plaintext=$(echo -n "FR7630001007941234567890185" | base64)
-vault write -f transit/keys/datacorp-pii/rotate            # nouvelle version de la clé
-cat /lab/scripts/setup/tp1-chiffrer-existant.sh            # lisez-le avant de l'exécuter
-/lab/scripts/setup/tp1-chiffrer-existant.sh                # chiffre les 2 260 IBAN existants
-/lab/scripts/pg-admin.sh -c "SELECT matricule, left(iban, 30) FROM rh.employes LIMIT 3"`,
+				Doc: `vault secrets enable transit                       # le moteur qui chiffre à la demande
+vault write -f transit/keys/datacorp-pii           # crée une clé AES-256 (elle ne sort jamais de Vault)
+vault write transit/encrypt/datacorp-pii plaintext=$(echo -n "FR7630001007941234567890185" | base64)   # Vault veut du base64
+vault write -f transit/keys/datacorp-pii/rotate    # nouvelle version de la clé (v2)
+/lab/scripts/setup/tp1-chiffrer-existant.sh        # chiffre tous les IBAN déjà en base
+sql "SELECT matricule, left(iban, 30) FROM rh.employes LIMIT 3"`,
 				Verify: "Les IBAN commencent maintenant par vault:v2:.",
 				Run: []string{
 					`vault secrets list | grep -q '^transit/' || vault secrets enable transit`,
@@ -167,37 +163,39 @@ cat /lab/scripts/setup/tp1-chiffrer-existant.sh            # lisez-le avant de l
 					`vault write transit/encrypt/datacorp-pii plaintext=$(echo -n "FR7630001007941234567890185" | base64)`,
 					`[ "$(vault read -field=latest_version transit/keys/datacorp-pii)" -ge 2 ] && echo "[transit] clé déjà en version $(vault read -field=latest_version transit/keys/datacorp-pii)" || vault write -f transit/keys/datacorp-pii/rotate`,
 					`/lab/scripts/setup/tp1-chiffrer-existant.sh`,
-					`/lab/scripts/pg-admin.sh -c "SELECT matricule, left(iban, 30) FROM rh.employes LIMIT 3"`,
+					`sql "SELECT matricule, left(iban, 30) FROM rh.employes LIMIT 3"`,
 				},
 				Expect: []string{`vault:v\d+:`, `identifiant révoqué`},
 			},
 			{
 				ID: "tp1-6", Num: 6, Title: "Brancher tout le pipeline et vérifier le chiffrement réseau", Role: "Alice",
-				Why:    "On applique la même logique à RabbitMQ et MinIO (script fourni), puis on prouve que tout circule en TLS.",
+				Why:    "On applique la même idée à RabbitMQ et MinIO (script fourni), puis on vérifie que tout circule chiffré (TLS).",
 				Crypto: "En transit : AMQPS, HTTPS, PostgreSQL TLS 1.3 · Au repos : MinIO SSE-S3 · Applicatif : transit",
-				Doc: `/lab/scripts/setup/tp1-pipeline.sh                         # RabbitMQ, MinIO, AppRole, puis lance le pipeline
-/lab/scripts/pg-admin.sh -c "SELECT ingere_par, count(*) FROM finance.transactions GROUP BY 1"
-/lab/scripts/pg-admin.sh -c "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
-psql "host=postgres dbname=datacorp user=postgres sslmode=disable"      # connexion SANS chiffrement`,
-				Verify: "Les transactions du pipeline sont insérées par un compte v-approle-…, la session est en TLSv1.3, et la connexion non chiffrée est refusée.",
+				Doc: `/lab/scripts/setup/tp1-pipeline.sh                 # branche RabbitMQ + MinIO sur Vault et lance le pipeline
+sql "SELECT ingere_par, count(*) FROM finance.transactions GROUP BY 1"    # qui a écrit les transactions ?
+sql "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()"   # notre connexion est-elle chiffrée ?
+psql "host=postgres user=postgres sslmode=disable" -c "SELECT 1"          # sans chiffrement : refusé`,
+				Verify: "Les transactions sont écrites par un compte v-approle-…, la connexion est en TLSv1.3, et la connexion sans chiffrement est refusée.",
 				Run: []string{
 					`/lab/scripts/setup/tp1-pipeline.sh`,
-					`/lab/scripts/pg-admin.sh -c "SELECT ingere_par, count(*) FROM finance.transactions GROUP BY 1"`,
-					`/lab/scripts/pg-admin.sh -c "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()"`,
-					`psql -w "host=postgres dbname=datacorp user=postgres sslmode=disable" -c "SELECT 1" </dev/null`,
+					`sql "SELECT ingere_par, count(*) FROM finance.transactions GROUP BY 1"`,
+					`sql "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()"`,
+					`psql -w "host=postgres user=postgres sslmode=disable" -c "SELECT 1" </dev/null`,
 				},
 				Expect: []string{`v-approle-`, `TLSv1\.3`, `no encryption`},
 			},
 			{
 				ID: "tp1-7", Num: 7, Title: "Fermer l'ancien accès", Role: "Samira",
-				Why:    "Le compte historique legacy_etl et son mot de passe connu de tous doivent disparaître.",
+				Why:    "Le vieux compte legacy_etl et son mot de passe connu de tous doivent disparaître.",
 				Crypto: "Suppression du secret statique",
-				Doc: `/lab/scripts/pg-admin.sh -c "ALTER ROLE legacy_etl NOLOGIN PASSWORD NULL"
-bash /lab/scripts/legacy/ingest_legacy.sh ; shred -u /tmp/export_rh_*.csv`,
+				Doc: `sql "ALTER ROLE legacy_etl NOLOGIN PASSWORD NULL"   # on ferme le vieux compte
+bash /lab/scripts/legacy/ingest_legacy.sh          # le vieux script échoue maintenant
+rm -f /tmp/export_rh_*.csv                         # on détruit l'export en clair`,
 				Verify: "Le vieux script échoue.",
 				Run: []string{
-					`/lab/scripts/pg-admin.sh -c "ALTER ROLE legacy_etl NOLOGIN PASSWORD NULL"`,
-					`bash /lab/scripts/legacy/ingest_legacy.sh ; shred -u /tmp/export_rh_*.csv 2>/dev/null; ls /tmp/export_rh_*.csv 2>/dev/null || echo "[ok] export en clair détruit"`,
+					`sql "ALTER ROLE legacy_etl NOLOGIN PASSWORD NULL"`,
+					`bash /lab/scripts/legacy/ingest_legacy.sh`,
+					`rm -f /tmp/export_rh_*.csv; ls /tmp/export_rh_*.csv 2>/dev/null || echo "[ok] export en clair détruit"`,
 				},
 				Expect: []string{`(password authentication failed|not permitted to log in)`},
 			},
@@ -241,77 +239,73 @@ bash /lab/scripts/legacy/ingest_legacy.sh ; shred -u /tmp/export_rh_*.csv`,
 				ID: "tp2-1", Num: 1, Title: "Lire la politique de la DPO", Role: "Claire (DPO)",
 				Why:    "On ne crée pas de droits au hasard : on part de la classification des données faite par la DPO.",
 				Crypto: "La classification décide quoi CHIFFRER, SUPPRIMER ou GÉNÉRALISER",
-				Doc: `/lab/scripts/pg-admin.sh -c "SELECT table_name, column_name, niveau, traitement_requis
-  FROM gouvernance.classification_donnees WHERE schema_name = 'rh' ORDER BY niveau DESC"`,
+				Doc:    `sql "SELECT * FROM gouvernance.classification_donnees WHERE schema_name = 'rh' ORDER BY niveau DESC"`,
 				Verify: "Vous savez quelles colonnes sont RESTREINT (NIR, IBAN, salaire) et ce qu'il faut en faire.",
-				Run: []string{`/lab/scripts/pg-admin.sh -c "SELECT table_name, column_name, niveau, traitement_requis
-  FROM gouvernance.classification_donnees WHERE schema_name = 'rh' ORDER BY niveau DESC"`},
+				Run:    []string{`sql "SELECT table_name, column_name, niveau, traitement_requis FROM gouvernance.classification_donnees WHERE schema_name = 'rh' ORDER BY niveau DESC"`},
 				Expect: []string{`RESTREINT`},
 			},
 			{
 				ID: "tp2-2", Num: 2, Title: "Créer les rôles, puis les comptes", Role: "Alice",
 				Why:    "D'abord les rôles (ce que l'on fait), ensuite les personnes (qui l'on est).",
 				Crypto: "Mots de passe générés et rangés dans Vault, jamais affichés",
-				Doc: `less /lab/scripts/sql/tp2/01-roles.sql                     # lisez les GRANT : un bloc par rôle
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/01-roles.sql
-/lab/scripts/setup/tp2-comptes.sh                          # 6 comptes, mots de passe rangés dans Vault
-as() { u=$1; shift; PGPASSWORD="$(vault kv get -field=password kv/datacorp/users/pg/$u)" psql -U "$u" -c "$*"; }`,
-				Verify: `/lab/scripts/pg-admin.sh -c "\du" montre alice membre de r_data_engineer, bruno de r_data_analyst, etc.`,
+				Doc: `cat /lab/scripts/sql/tp2/01-roles.sql              # lisez : un bloc de droits (GRANT) par rôle
+sql -f /lab/scripts/sql/tp2/01-roles.sql           # 1. crée les rôles
+/lab/scripts/setup/tp2-comptes.sh                  # 2. crée les 6 personnes (mots de passe rangés dans Vault)
+sql "\du"                                          # qui a quel rôle ?`,
+				Verify: `sql "\du" montre alice membre de r_data_engineer, bruno de r_data_analyst, etc.`,
 				Run: []string{
 					`grep -E "^(CREATE ROLE|GRANT)" /lab/scripts/sql/tp2/01-roles.sql | head -20`,
-					`if /lab/scripts/pg-admin.sh -Atc "SELECT 1 FROM pg_roles WHERE rolname='r_data_engineer'" | grep -q 1; then echo "[sql] rôles déjà créés"; else /lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/01-roles.sql; fi`,
+					`if sql -Atc "SELECT 1 FROM pg_roles WHERE rolname='r_data_engineer'" | grep -q 1; then echo "[sql] rôles déjà créés"; else sql -f /lab/scripts/sql/tp2/01-roles.sql; fi`,
 					`/lab/scripts/setup/tp2-comptes.sh`,
-					`/lab/scripts/pg-admin.sh -c "\du alice|bruno|claire|david|samira|nadia"`,
+					`sql "\du alice|bruno|claire|david|samira|nadia"`,
 				},
 				Expect: []string{`alice.*r_data_engineer`, `bruno.*r_data_analyst`},
 			},
 			{
 				ID: "tp2-3", Num: 3, Title: "Tester le moindre privilège", Role: "Claire",
 				Why: "Une règle de sécurité ne vaut que si on a vérifié qu'elle bloque.",
-				Doc: `as bruno "SELECT * FROM rh.employes LIMIT 1"                       # l'analyste : refusé
-as alice "SELECT nir FROM rh.employes LIMIT 1"                     # colonne NIR : refusé
-as alice "SELECT matricule, departement FROM rh.employes LIMIT 2"  # colonnes autorisées : OK
-as david "SELECT count(*) FROM finance.transactions"               # l'admin système : refusé`,
-				Verify: "3 refus (permission denied) et 1 succès.",
+				Doc: `sql-as bruno "SELECT * FROM rh.employes LIMIT 1"                        # l'analyste : refusé
+sql-as alice "SELECT nir FROM rh.employes LIMIT 1"                      # colonne NIR : refusé
+sql-as alice "SELECT matricule, departement FROM rh.employes LIMIT 2"   # colonnes autorisées : OK
+sql-as david "SELECT count(*) FROM finance.transactions"                # l'admin système : refusé`,
+				Verify: "3 refus (permission denied) et 1 succès. Notez-les dans un tableau « test / attendu / obtenu ».",
 				Run: []string{
-					`as bruno "SELECT * FROM rh.employes LIMIT 1"`,
-					`as alice "SELECT nir FROM rh.employes LIMIT 1"`,
-					`as alice "SELECT matricule, departement FROM rh.employes LIMIT 2"`,
-					`as david "SELECT count(*) FROM finance.transactions"`,
+					`sql-as bruno "SELECT * FROM rh.employes LIMIT 1"`,
+					`sql-as alice "SELECT nir FROM rh.employes LIMIT 1"`,
+					`sql-as alice "SELECT matricule, departement FROM rh.employes LIMIT 2"`,
+					`sql-as david "SELECT count(*) FROM finance.transactions"`,
 				},
 				Expect: []string{`permission denied for schema rh|permission denied for table employes`, `\(2 rows\)`, `permission denied for (schema finance|table transactions)`},
 			},
 			{
 				ID: "tp2-4", Num: 4, Title: "Filtrer les lignes (Row Level Security)", Role: "Nadia (Manager RH)",
 				Why: "Nadia a besoin des fiches de son département, pas de toute l'entreprise.",
-				Doc: `less /lab/scripts/sql/tp2/02-rls.sql
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/02-rls.sql
-as nadia "SELECT departement, count(*) FROM rh.employes GROUP BY 1"`,
+				Doc: `cat /lab/scripts/sql/tp2/02-rls.sql                # lisez la règle : chacun voit son département
+sql -f /lab/scripts/sql/tp2/02-rls.sql             # on l'active
+sql-as nadia "SELECT departement, count(*) FROM rh.employes GROUP BY 1"`,
 				Verify: "Nadia ne voit qu'une ligne : Finance | 32.",
 				Run: []string{
 					`grep -vE "^\s*--|^\s*$" /lab/scripts/sql/tp2/02-rls.sql | head -25`,
-					`if /lab/scripts/pg-admin.sh -Atc "SELECT relrowsecurity FROM pg_class WHERE oid='rh.employes'::regclass" | grep -q t; then echo "[sql] RLS déjà active"; else /lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/02-rls.sql; fi`,
-					`as nadia "SELECT departement, count(*) FROM rh.employes GROUP BY 1"`,
+					`if sql -Atc "SELECT relrowsecurity FROM pg_class WHERE oid='rh.employes'::regclass" | grep -q t; then echo "[sql] RLS déjà active"; else sql -f /lab/scripts/sql/tp2/02-rls.sql; fi`,
+					`sql-as nadia "SELECT departement, count(*) FROM rh.employes GROUP BY 1"`,
 				},
 				Expect: []string{`Finance\s*\|\s*32`, `\(1 row\)`},
 			},
 			{
 				ID: "tp2-5", Num: 5, Title: "Masquer les données pour les analystes", Role: "Alice → Claire",
-				Why:    "Bruno doit pouvoir compter, comparer, faire des moyennes… sans jamais voir qui est qui.",
+				Why:    "Bruno doit pouvoir compter, comparer, faire des moyennes… sans jamais savoir qui est qui.",
 				Figure: "fig_tp2_masquage.png",
 				Crypto: "Pseudonymisation par HMAC-SHA256 (clé secrète) + masquage + généralisation",
-				Doc: `less /lab/scripts/sql/tp2/03-vues-masquees.sql             # repérez HMAC, masquer_email, tranche_age
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/03-vues-masquees.sql
-as claire "SELECT * FROM analytics.v_employes LIMIT 3"     # la DPO regarde le résultat
-as claire "SELECT count(*) AS personnes_uniques FROM (SELECT departement, poste, tranche_age, annee_embauche
-           FROM analytics.v_employes GROUP BY 1,2,3,4 HAVING count(*) = 1) x"`,
+				Doc: `cat /lab/scripts/sql/tp2/03-vues-masquees.sql      # repérez : hmac, masquer_email, tranche_age
+sql -f /lab/scripts/sql/tp2/03-vues-masquees.sql   # crée la vue masquée analytics.v_employes
+sql-as claire "SELECT * FROM analytics.v_employes LIMIT 3"   # la DPO regarde le résultat
+sql-as claire "SELECT count(*) AS personnes_uniques FROM (SELECT 1 FROM analytics.v_employes GROUP BY departement, poste, tranche_age, annee_embauche HAVING count(*) = 1) x"   # combien restent reconnaissables ?`,
 				Verify: "Aucun nom, NIR ou IBAN dans la vue. Notez le nombre de « personnes uniques » (question 3).",
 				Run: []string{
 					`grep -nE "hmac|masquer_email|tranche_age" /lab/scripts/sql/tp2/03-vues-masquees.sql | head -12`,
-					`if /lab/scripts/pg-admin.sh -Atc "SELECT to_regclass('analytics.v_employes')" | grep -q v_employes; then echo "[sql] vues déjà créées"; else /lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/03-vues-masquees.sql; fi`,
-					`as claire "SELECT * FROM analytics.v_employes LIMIT 3"`,
-					`as claire "SELECT count(*) AS personnes_uniques FROM (SELECT departement, poste, tranche_age, annee_embauche
-           FROM analytics.v_employes GROUP BY 1,2,3,4 HAVING count(*) = 1) x"`,
+					`if sql -Atc "SELECT to_regclass('analytics.v_employes')" | grep -q v_employes; then echo "[sql] vues déjà créées"; else sql -f /lab/scripts/sql/tp2/03-vues-masquees.sql; fi`,
+					`sql-as claire "SELECT * FROM analytics.v_employes LIMIT 3"`,
+					`sql-as claire "SELECT count(*) AS personnes_uniques FROM (SELECT 1 FROM analytics.v_employes GROUP BY departement, poste, tranche_age, annee_embauche HAVING count(*) = 1) x"`,
 				},
 				Expect: []string{`personnes_uniques`, `\(3 rows\)`},
 			},
@@ -319,20 +313,18 @@ as claire "SELECT count(*) AS personnes_uniques FROM (SELECT departement, poste,
 				ID: "tp2-6", Num: 6, Title: "Faire valider par la DPO avant d'ouvrir", Role: "Alice + Claire → Bruno",
 				Why:    "Séparation des tâches : Alice prépare, Claire valide, et seulement après la vue est ouverte aux analystes.",
 				Figure: "fig_tp2_cycle_habilitations.png",
-				Doc: `/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/04-publication.sql
-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"     # refusé : pas encore validée
-as claire "INSERT INTO gouvernance.validations_dpo (objet, decision, commentaire)
-           VALUES ('analytics.v_employes', 'APPROUVE', 'Pas d''identifiant direct')"
-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"     # accepté
-as bruno  "SELECT departement, tranche_salaire, count(*) FROM analytics.v_employes GROUP BY 1,2 LIMIT 5"`,
+				Doc: `sql -f /lab/scripts/sql/tp2/04-publication.sql                            # crée la fonction publier_vue
+sql-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"      # refusé : pas encore validée
+sql-as claire "INSERT INTO gouvernance.validations_dpo (objet, decision, commentaire) VALUES ('analytics.v_employes', 'APPROUVE', 'OK DPO')"
+sql-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"      # accepté
+sql-as bruno  "SELECT departement, tranche_salaire, count(*) FROM analytics.v_employes GROUP BY 1,2 LIMIT 5"`,
 				Verify: "La publication est refusée avant la validation, acceptée après, et Bruno lit enfin la vue.",
 				Run: []string{
-					`if /lab/scripts/pg-admin.sh -Atc "SELECT to_regproc('analytics.publier_vue')" | grep -q publier; then echo "[sql] fonction déjà créée"; else /lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/04-publication.sql; fi`,
-					`as alice  "SELECT analytics.publier_vue('analytics.v_employes')"     # refusé si pas encore validée`,
-					`as claire "INSERT INTO gouvernance.validations_dpo (objet, decision, commentaire)
-           VALUES ('analytics.v_employes', 'APPROUVE', 'Pas d''identifiant direct')"`,
-					`as alice  "SELECT analytics.publier_vue('analytics.v_employes')"     # accepté`,
-					`as bruno  "SELECT departement, tranche_salaire, count(*) FROM analytics.v_employes GROUP BY 1,2 LIMIT 5"`,
+					`if sql -Atc "SELECT to_regproc('analytics.publier_vue')" | grep -q publier; then echo "[sql] fonction déjà créée"; else sql -f /lab/scripts/sql/tp2/04-publication.sql; fi`,
+					`sql-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"`,
+					`sql-as claire "INSERT INTO gouvernance.validations_dpo (objet, decision, commentaire) VALUES ('analytics.v_employes', 'APPROUVE', 'OK DPO')"`,
+					`sql-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"`,
+					`sql-as bruno  "SELECT departement, tranche_salaire, count(*) FROM analytics.v_employes GROUP BY 1,2 LIMIT 5"`,
 				},
 				Expect: []string{`publiée pour r_data_analyst`, `tranche_salaire`},
 			},
@@ -340,11 +332,11 @@ as bruno  "SELECT departement, tranche_salaire, count(*) FROM analytics.v_employ
 				ID: "tp2-7", Num: 7, Title: "Les mêmes règles sur le stockage objet (MinIO)", Role: "Alice / Bruno",
 				Why:    "Les fichiers suivent les mêmes règles que la base : Bruno lit la zone curated (masquée), jamais raw-data (brute).",
 				Crypto: "Zones raw-data et curated chiffrées au repos (SSE-S3), accès en HTTPS",
-				Doc: `cat /lab/minio-policies/data-analyst.json                  # une seule règle : lecture de "curated"
-/lab/scripts/setup/tp2-minio.sh && source /root/.minio-alias
-mc ls bruno/raw-data/                                      # refusé
-mc cp /etc/hostname bruno/curated/test.txt                 # refusé : lecture seule
-mc ls alice/raw-data/transactions/ | head -3               # Alice (Data Engineer) : OK`,
+				Doc: `cat /lab/minio-policies/data-analyst.json         # une seule règle : lire « curated »
+/lab/scripts/setup/tp2-minio.sh                   # crée alice et bruno dans MinIO
+mc ls bruno/raw-data/                             # Bruno : refusé
+mc cp /etc/hostname bruno/curated/test.txt        # Bruno ne peut pas écrire : refusé
+mc ls alice/raw-data/transactions/                # Alice (Data Engineer) : OK`,
 				Verify: "2 refus pour Bruno, 1 succès pour Alice.",
 				Run: []string{
 					`cat /lab/minio-policies/data-analyst.json`,
@@ -381,7 +373,7 @@ mc ls alice/raw-data/transactions/ | head -3               # Alice (Data Enginee
 	{
 		ID: "tp3", Title: "TP3 — Tracer, détecter, prouver (audit & conformité)",
 		Subtitle: "Séance 3 sur 3 · Journalisation, SIEM & conformité RGPD",
-		Tools:    "pgAudit, journal d'audit Vault, webhook d'audit MinIO, jq, detect.py",
+		Tools:    "pgAudit, journal d'audit Vault, webhook d'audit MinIO, logs, detect.py",
 		Context:  "Mercredi matin, la supervision signale une nuit agitée : connexions ratées, exports volumineux, accès refusés. Samira doit comprendre ce qui s'est passé ; Claire a 72 heures pour décider s'il faut prévenir la CNIL.",
 		Course: []string{
 			"Un bon journal répond à 5 questions : qui ? quoi ? sur quelle donnée ? quand ? d'où ? — et donne le résultat.",
@@ -394,39 +386,32 @@ mc ls alice/raw-data/transactions/ | head -3               # Alice (Data Enginee
 			{
 				ID: "tp3-1", Num: 1, Title: "Allumer l'audit PostgreSQL", Role: "Samira",
 				Why: "On veut tracer les accès aux tables RESTREINT et les changements de droits, pas tout le reste (trop de bruit).",
-				Doc: `less /lab/scripts/sql/tp3/01-audit.sql                     # repérez le rôle "auditeur"
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp3/01-audit.sql
-as() { u=$1; shift; PGPASSWORD="$(vault kv get -field=password kv/datacorp/users/pg/$u)" psql -U "$u" -c "$*"; }
-as nadia "SELECT nom, poste FROM rh.employes LIMIT 3"
-jq -c 'select((.message // "") | startswith("AUDIT")) | {timestamp, user, message}' /logs/postgres/postgresql.json | tail -2`,
-				Verify: "Une ligne AUDIT: OBJECT,…,rh.employes,…,3 au nom de nadia apparaît.",
+				Doc: `cat /lab/scripts/sql/tp3/01-audit.sql              # repérez le rôle « auditeur »
+sql -f /lab/scripts/sql/tp3/01-audit.sql           # active l'audit sur les tables sensibles
+sql-as nadia "SELECT nom, poste FROM rh.employes LIMIT 3"   # Nadia lit 3 fiches…
+logs audit                                         # …et le journal l'a noté`,
+				Verify: "Une ligne « nadia  AUDIT: OBJECT,…,rh.employes,…,3 » apparaît.",
 				Run: []string{
 					`grep -nE "auditeur|pgaudit" /lab/scripts/sql/tp3/01-audit.sql | head -12`,
-					`if /lab/scripts/pg-admin.sh -Atc "SELECT 1 FROM pg_roles WHERE rolname='auditeur'" | grep -q 1; then echo "[sql] audit déjà activé"; else /lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp3/01-audit.sql; fi`,
-					`as nadia "SELECT nom, poste FROM rh.employes LIMIT 3"`,
-					`sleep 1; jq -c 'select((.message // "") | startswith("AUDIT")) | {timestamp, user, message}' /logs/postgres/postgresql.json | tail -2`,
+					`if sql -Atc "SELECT 1 FROM pg_roles WHERE rolname='auditeur'" | grep -q 1; then echo "[sql] audit déjà activé"; else sql -f /lab/scripts/sql/tp3/01-audit.sql; fi`,
+					`sql-as nadia "SELECT nom, poste FROM rh.employes LIMIT 3"`,
+					`sleep 1; N=3 logs audit`,
 				},
-				Expect: []string{`AUDIT: OBJECT.*rh\.employes`, `"user":"nadia"`},
+				Expect: []string{`AUDIT: OBJECT.*rh\.employes`, `nadia\s+AUDIT`},
 			},
 			{
 				ID: "tp3-2", Num: 2, Title: "Collecter MinIO et créer le coffre à preuves", Role: "Samira",
 				Why:    "Les journaux doivent quitter la machine surveillée et être rangés là où personne ne peut les effacer.",
 				Crypto: "Intégrité : SHA-256 chaîné + Object Lock WORM (GOVERNANCE 30 j)",
-				Doc: `cat /lab/scripts/setup/tp3-coffre.sh                       # webhook, bucket WORM, compte de dépôt
-/lab/scripts/setup/tp3-coffre.sh                           # AUDIT_TOKEN : voir le fichier .env
-/lab/scripts/seal-logs.sh                                  # 1re archive scellée (état de référence)
-OBJ=$(mc ls --recursive dc/audit-logs | awk '{print $NF}' | grep tar.gz | head -1)
-mc rm "dc/audit-logs/$OBJ"                                 # on essaie d'effacer une preuve…`,
-				Verify: "L'effacement est refusé (objet protégé par la rétention).",
+				Doc: `cat /lab/scripts/setup/tp3-coffre.sh               # lisez : collecte MinIO, coffre WORM, compte de dépôt
+/lab/scripts/setup/tp3-coffre.sh                   # met tout en place
+/lab/scripts/seal-logs.sh                          # range une 1re archive des journaux dans le coffre
+effacer-preuve                                     # on essaie de l'effacer…`,
+				Verify: "L'effacement est refusé (objet protégé par la rétention WORM).",
 				Run: []string{
 					`script -qec /lab/scripts/setup/tp3-coffre.sh /dev/null   # pseudo-TTY : « mc admin service restart » en exige un`,
 					`/lab/scripts/seal-logs.sh`,
-					`OBJ=$(mc ls --recursive dc/audit-logs | awk '{print $NF}' | grep tar.gz | head -1); echo "objet visé : $OBJ"`,
-					`mc rm "dc/audit-logs/$OBJ"   # bucket versionné : simple « delete marker », la version verrouillée reste intacte`,
-					`mc ls --versions "dc/audit-logs/$OBJ"`,
-					`VID=$(mc ls --versions --json "dc/audit-logs/$OBJ" | jq -r 'select(.isDeleteMarker != true) | .versionId' | head -1)
-mc rm --version-id "$VID" "dc/audit-logs/$OBJ"   # effacer VRAIMENT la preuve : refusé par Object Lock`,
-					`mc retention info --version-id "$VID" "dc/audit-logs/$OBJ"`,
+					`effacer-preuve`,
 				},
 				Expect: []string{`is WORM protected and cannot be overwritten`},
 			},
@@ -442,24 +427,18 @@ mc rm --version-id "$VID" "dc/audit-logs/$OBJ"   # effacer VRAIMENT la preuve : 
 				ID: "tp3-4", Num: 4, Title: "Enquêter à la main", Role: "Samira",
 				Why:    "Un bon analyste sait lire les journaux avant de faire confiance à un outil automatique.",
 				Figure: "fig_tp3_arbre_violation.png",
-				Doc: `P=/logs/postgres/postgresql.json
-jq -r 'select(.state_code=="28P01") | .user' $P | sort | uniq -c          # a) mots de passe ratés, par compte
-jq -r 'select((.message // "") | startswith("AUDIT: OBJECT"))
-       | [.timestamp, .user, .message[0:110]] | @tsv' $P | tail -5         # b) lectures de tables sensibles
-jq -c 'select((.api.statusCode // 0) >= 400)
-       | {time, qui: .accessKey, api: .api.name, bucket: .api.bucket}' /logs/minio/audit.jsonl   # c) refus MinIO
-jq -c 'select(.error != null) | {time, qui: .auth.display_name, path: .request.path}' /logs/vault/audit.log  # d) refus Vault`,
-				Verify: "Au moins 6 événements dans la chronologie, dans le bon ordre (tout converti en UTC : PostgreSQL écrit en CEST).",
+				Doc: `logs echecs      # a) mots de passe ratés, par compte (PostgreSQL)
+logs audit       # b) lectures de tables sensibles (PostgreSQL, heure de Paris)
+logs minio       # c) accès refusés sur le stockage (MinIO, heure UTC)
+logs vault       # d) demandes refusées par le coffre (Vault, heure UTC)`,
+				Verify: "Au moins 6 événements dans la chronologie, dans le bon ordre (tout converti en UTC : PostgreSQL écrit l'heure de Paris).",
 				Run: []string{
-					`P=/logs/postgres/postgresql.json`,
-					`jq -r 'select(.state_code=="28P01") | .user' $P | sort | uniq -c          # a) mots de passe ratés`,
-					`jq -r 'select((.message // "") | startswith("AUDIT: OBJECT"))
-       | [.timestamp, .user, .message[0:110]] | @tsv' $P | tail -5         # b) lectures sensibles`,
-					`jq -c 'select((.api.statusCode // 0) >= 400)
-       | {time, qui: .accessKey, api: .api.name, bucket: .api.bucket}' /logs/minio/audit.jsonl | tail -8   # c) refus MinIO`,
-					`jq -c 'select(.error != null) | {time, qui: .auth.display_name, path: .request.path}' /logs/vault/audit.log | tail -5  # d) refus Vault`,
+					`logs echecs`,
+					`logs audit`,
+					`logs minio`,
+					`logs vault`,
 				},
-				Expect: []string{`\d+ bruno`, `AUDIT: OBJECT`, `"qui":"bruno"`},
+				Expect: []string{`\d+ bruno`, `AUDIT: OBJECT`, `Z\s+bruno\s`},
 			},
 			{
 				ID: "tp3-5", Num: 5, Title: "Détecter automatiquement", Role: "Samira",
@@ -473,12 +452,14 @@ jq -c 'select(.error != null) | {time, qui: .auth.display_name, path: .request.p
 				ID: "tp3-6", Num: 6, Title: "Sceller les preuves", Role: "Samira → Claire",
 				Why:    "Si l'affaire va plus loin (licenciement, plainte, CNIL), il faudra prouver que les journaux n'ont pas été modifiés.",
 				Crypto: "Hachage SHA-256 chaîné (mini-blockchain) + WORM",
-				Doc: `/lab/scripts/seal-logs.sh                                  # 2e archive, chaînée à la 1re
-cd /lab/work/scelles && sha256sum -c ./*.sha256 && cat chaine.txt`,
-				Verify: "Chaque archive affiche OK, et chaine.txt contient 2 maillons.",
+				Doc: `/lab/scripts/seal-logs.sh                          # 2e archive, reliée à la 1re
+cd /lab/work/scelles && sha256sum -c *.sha256      # chaque archive est intacte ? (OK)
+cat /lab/work/scelles/chaine.txt                   # la chaîne des empreintes`,
+				Verify: "Chaque archive affiche OK, et chaine.txt contient 2 lignes.",
 				Run: []string{
 					`/lab/scripts/seal-logs.sh`,
-					`cd /lab/work/scelles && sha256sum -c ./*.sha256 && cat chaine.txt`,
+					`cd /lab/work/scelles && sha256sum -c *.sha256`,
+					`cat /lab/work/scelles/chaine.txt`,
 				},
 				Expect: []string{`: OK`, `GENESIS|[0-9a-f]{64} \d{8}T`},
 			},

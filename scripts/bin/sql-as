@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  sql-as <personne> "REQUÊTE"
+#  Exécute la requête en tant qu'alice, bruno, claire, david, samira ou nadia.
+#  Leur mot de passe est lu dans Vault (créé au TP2 · étape 2).
+#  Exemple :  sql-as bruno "SELECT * FROM rh.employes LIMIT 1"
+# =============================================================================
+u=${1:?usage : sql-as <personne> \"SELECT ...\"}; shift
+[ $# -eq 0 ] && { echo 'usage : sql-as <personne> "SELECT ..."' >&2; exit 2; }
+pw=$(vault kv get -field=password "kv/datacorp/users/pg/$u" 2>/dev/null) ||
+  { echo "Pas de mot de passe pour '$u' dans Vault : faites d'abord le TP2 · étape 2" >&2; exit 1; }
+PGPASSWORD="$pw" exec psql -U "$u" -c "$*"

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  sql "REQUÊTE"          exécute une requête en tant qu'administrateur PostgreSQL
+#  sql -f fichier.sql     exécute un fichier SQL
+#  Le mot de passe administrateur est lu dans Vault (jamais écrit en dur).
+# =============================================================================
+[ $# -eq 0 ] && { echo 'usage : sql "SELECT ..."   ou   sql -f fichier.sql' >&2; exit 2; }
+if [ "${1:0:1}" = "-" ]; then exec /lab/scripts/pg-admin.sh "$@"; fi
+exec /lab/scripts/pg-admin.sh -c "$*"

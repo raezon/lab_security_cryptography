@@ -7,7 +7,7 @@
 #  Le jeton partagé est la variable AUDIT_TOKEN du fichier .env (sur l'hôte).
 # =============================================================================
 set -euo pipefail
-if [ -z "${AUDIT_TOKEN:-}" ]; then read -rsp "AUDIT_TOKEN (voir .env) : " AUDIT_TOKEN; echo; fi
+if [ -z "${AUDIT_TOKEN:-}" ]; then read -rsp "AUDIT_TOKEN (bouton « Identifiants ») : " AUDIT_TOKEN; echo; fi
 mc alias set dc https://minio:9000 "$(vault kv get -field=username kv/datacorp/break-glass/minio)" \
   "$(vault kv get -field=password kv/datacorp/break-glass/minio)" >/dev/null
 

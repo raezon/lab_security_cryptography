@@ -2,12 +2,26 @@
 // Console DataCorp Secure — client (sans dépendance)
 
 const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-let CATALOG = [], STATUS = { steps: {} }, BUSY = false;
+let CATALOG = [], STATUS = { steps: {} }, BUSY = false, INFO = {}, ME = null;
+let MODE = "facile";           // "facile" (boutons) ou "expert" (on tape les commandes, noté)
+let SCORE = {};                // { stepId: { points, max, method } } — personnel, en localStorage
+const STEP_MAX = 10, PTS = { typed: 10, prefill: 4, solution: 2 };
+const HINT = {};               // { stepId: niveau d'aide déjà utilisé } (mémoire de session)
+function loadScore() { try { SCORE = JSON.parse(localStorage.getItem("score") || "{}"); } catch { SCORE = {}; } }
+function saveScore() { try { localStorage.setItem("score", JSON.stringify(SCORE)); } catch {} }
+function award(id, method) {
+  const pts = PTS[method] ?? 0, cur = SCORE[id]?.points ?? -1;
+  if (pts > cur) { SCORE[id] = { points: pts, max: STEP_MAX, method }; saveScore(); }
+}
+// Nom de l'étudiant, envoyé à chaque appel : la console note qui a lancé quoi (lab partagé).
+const fullName = () => (ME ? `${ME.prenom} ${ME.nom}` : "");
+const hdrs = () => ({ "Content-Type": "application/json", "X-Etudiant": encodeURIComponent(fullName()) });
 const trainer = () => $("#trainer").checked;
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const r = await fetch(path, { headers: hdrs(), ...opts });
   const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
   if (!r.ok || (j && j.error)) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
@@ -39,7 +53,7 @@ function ansiHTML(s) {
 // Lance une requête qui renvoie du NDJSON et affiche la sortie en direct.
 async function streamTo(url, body, term) {
   term.innerHTML = ""; let raw = "", end = null;
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const r = await fetch(url, { method: "POST", headers: hdrs(), body: JSON.stringify(body || {}) });
   if (!r.ok) { term.innerHTML = `<span class="a-red">${esc(await r.text())}</span>`; return { status: "ko", code: -1 }; }
   const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
   for (;;) {
@@ -84,14 +98,15 @@ async function refreshStatus() {
 // ---------------------------------------------------------------- routeur
 const routes = {
   "": home, "#/": home,
-  "#/crypto/transit": transitView, "#/crypto/app": appView, "#/crypto/rest": restView, "#/terminal": terminalView, "#/access": accessView,
+  "#/crypto/transit": transitView, "#/crypto/app": appView, "#/crypto/rest": restView, "#/terminal": terminalView, "#/access": accessView, "#/score": scoreView,
 };
 function route() {
   const h = location.hash;
   const view = $("#view");
   let key = "home";
   if (h.startsWith("#/tp/")) { key = h.slice(5); tpView(view, key); }
-  else { (routes[h] || home)(view); key = { "#/crypto/transit": "transit", "#/crypto/app": "app", "#/crypto/rest": "rest", "#/terminal": "terminal", "#/access": "access" }[h] || "home"; }
+  else if (h.startsWith("#/cours/")) { key = "cours-" + h.slice(8); coursView(view, h.slice(8)); }
+  else { (routes[h] || home)(view); key = { "#/crypto/transit": "transit", "#/crypto/app": "app", "#/crypto/rest": "rest", "#/terminal": "terminal", "#/access": "access", "#/score": "score" }[h] || "home"; }
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === key));
   window.scrollTo(0, 0);
 }
@@ -147,11 +162,13 @@ function home(view) {
     <div class="grid g4" id="containers"></div>
     <h2>Interfaces web du lab</h2>
     <div class="grid g3">
-      <a class="card" href="https://localhost:8200" target="_blank" rel="noopener"><h3>Vault UI</h3><span class="muted small">https://localhost:8200 — jeton root : /lab/work/vault-init.json</span></a>
-      <a class="card" href="https://localhost:9001" target="_blank" rel="noopener"><h3>MinIO Console</h3><span class="muted small">https://localhost:9001 — compte minio-root (.env)</span></a>
-      <a class="card" href="https://localhost:15671" target="_blank" rel="noopener"><h3>RabbitMQ Management</h3><span class="muted small">https://localhost:15671 — rmq-admin (.env)</span></a>
-    </div>
-    <p class="muted small">Certificats signés par la CA interne du lab : acceptez l'avertissement du navigateur ou importez <code>ca.crt</code>.</p>`;
+      <div class="card"><h3>Vault UI</h3><p class="muted small" style="margin:0 0 10px">Connexion : méthode « Token », avec le jeton root (après TP1 · étape 2).</p>
+        <div class="row"><a class="btn primary sm" href="${esc(INFO.vault_url)}" target="_blank" rel="noopener">Ouvrir Vault UI ↗</a><button class="btn sm" data-creds>🔑 Voir les identifiants</button></div></div>
+      <div class="card"><h3>MinIO Console</h3><p class="muted small" style="margin:0 0 10px">Stockage des fichiers. Compte MinIO de la fenêtre « identifiants ».</p>
+        <div class="row"><a class="btn primary sm" href="${esc(INFO.minio_url)}" target="_blank" rel="noopener">Ouvrir MinIO ↗</a><button class="btn sm" data-creds>🔑 Voir les identifiants</button></div></div>
+      <div class="card"><h3>RabbitMQ Management</h3><p class="muted small" style="margin:0 0 10px">File de messages du pipeline. Compte RabbitMQ de la fenêtre « identifiants ».</p>
+        <div class="row"><a class="btn primary sm" href="${esc(INFO.rabbitmq_url)}" target="_blank" rel="noopener">Ouvrir RabbitMQ ↗</a><button class="btn sm" data-creds>🔑 Voir les identifiants</button></div></div>
+    </div>`;
   view.querySelectorAll(".node").forEach((n) => n.addEventListener("click", () => (location.hash = n.dataset.go)));
   $("#resetProg").onclick = async () => {
     if (!window.confirm("Effacer les coches ✅ de la console ? (l'état du lab lui-même n'est pas modifié)")) return;
@@ -185,25 +202,54 @@ function codeBlock(src) {
   return `<pre class="code"><button class="btn sm copy" data-copy>Copier</button>${html}</pre>`;
 }
 
-function stepCard(s) {
-  const st = STATUS.steps[s.id];
-  const cls = st ? st.status : "";
-  return `<section class="step ${cls}" id="step-${s.id}">
-    <div class="stephead">
+function stepHead(s, st, cls, right) {
+  return `<div class="stephead">
       <div class="stepnum">${s.num}</div>
       <div style="flex:1;min-width:0">
         <div class="row"><h3 style="margin:0">Étape ${s.num} — ${esc(s.title)}</h3><span class="spacer"></span>
-          <span class="chip ${cls}" data-badge>${st ? (st.status === "ok" ? "✅ validée" : "✗ critère non atteint") : "à faire"}</span>
-          <button class="btn primary" data-run="${s.id}">▶ Exécuter</button></div>
+          <span class="chip ${cls}" data-badge title="${st?.by ? "par " + esc(st.by) : ""}">${st ? (st.status === "ok" ? "✅ validée" : "✗ critère non atteint") + (st.by ? " · " + esc(st.by) : "") : "à faire"}</span>
+          ${right}</div>
         <div class="row" style="margin-top:6px"><span class="chip role">${esc(s.role)}</span>${s.crypto ? `<span class="chip crypto">🔐 ${esc(s.crypto)}</span>` : ""}</div>
       </div>
-    </div>
+    </div>`;
+}
+
+function stepCard(s) {
+  const st = STATUS.steps[s.id];
+  const cls = st ? st.status : "";
+  if (MODE === "expert") return stepCardExpert(s, st, cls);
+  return `<section class="step ${cls}" id="step-${s.id}">
+    ${stepHead(s, st, cls, `<button class="btn primary" data-run="${s.id}">▶ Exécuter</button>`)}
     <div class="stepbody">
       <p class="why">🎯 ${esc(s.why)}</p>
       ${codeBlock(s.doc)}
       <details class="runcode"><summary>Voir la version non interactive exécutée par la console</summary>${codeBlock(s.run.join("\n"))}</details>
       ${s.figure ? `<div class="figure"><img src="/img/${s.figure}" alt="" loading="lazy"></div>` : ""}
       <div class="verify">✅ <b>Vérifier :</b> ${esc(s.verify)}</div>
+      <div class="checks" data-checks>${st ? checksHTML(st.checks) : ""}</div>
+      <div class="term" data-term></div>
+    </div></section>`;
+}
+
+// Mode expert : l'étudiant tape la commande. Documentation + indices progressifs.
+function stepCardExpert(s, st, cls) {
+  const sc = SCORE[s.id];
+  const badge = sc ? `<span class="chip ok" data-pts>🏆 ${sc.points}/${STEP_MAX} pts</span>` : `<span class="chip" data-pts>${STEP_MAX} pts à gagner</span>`;
+  return `<section class="step ${cls}" id="step-${s.id}">
+    ${stepHead(s, st, cls, badge)}
+    <div class="stepbody">
+      <p class="why">🎯 ${esc(s.why)}</p>
+      <div class="verify">✅ <b>Objectif :</b> ${esc(s.verify)}</div>
+      ${s.figure ? `<div class="figure"><img src="/img/${s.figure}" alt="" loading="lazy"></div>` : ""}
+      <div class="hints">
+        <button class="btn sm" data-hint="doc">📖 Documentation</button>
+        <button class="btn sm" data-hint="fill">⬇️ Pré-remplir la commande <span class="muted">(−pts)</span></button>
+        <button class="btn sm" data-hint="sol">🔓 Solution <span class="muted">(min. pts)</span></button>
+      </div>
+      <div class="hintbox" data-hintbox hidden></div>
+      <textarea class="cmd" data-cmd rows="3" placeholder="Tapez ici votre (vos) commande(s), puis « Valider »…" spellcheck="false"></textarea>
+      <div class="row"><button class="btn primary" data-check="${s.id}">▶ Valider ma commande</button>
+        <span class="muted small">Tapé sans aide : ${PTS.typed} pts · pré-rempli : ${PTS.prefill} pts · solution : ${PTS.solution} pts</span></div>
       <div class="checks" data-checks>${st ? checksHTML(st.checks) : ""}</div>
       <div class="term" data-term></div>
     </div></section>`;
@@ -228,9 +274,59 @@ async function runStep(id) {
   return end.status;
 }
 
+// ---- mode expert : indices, pré-remplissage, validation notée
+function wireExpertStep(s, card) {
+  const box = $("[data-hintbox]", card), ta = $("[data-cmd]", card);
+  const show = (html) => { box.hidden = false; box.innerHTML = html; };
+  $$("[data-hint]", card).forEach((b) => (b.onclick = () => {
+    if (b.dataset.hint === "doc") return show(`<div class="small muted" style="margin-bottom:6px">📖 Commandes de référence de l'énoncé — à vous de les taper et d'adapter les <code>&lt;valeurs&gt;</code> :</div>${codeBlock(s.doc)}`);
+    if (b.dataset.hint === "fill") {
+      HINT[s.id] = HINT[s.id] === "solution" ? "solution" : "prefill";
+      ta.value = s.doc; ta.focus();
+      show(`<div class="small">⬇️ Énoncé recopié. Adaptez les <code>&lt;valeurs&gt;</code> puis validez — validation ainsi : <b>${PTS.prefill} pts</b>.</div>`);
+    }
+    if (b.dataset.hint === "sol") {
+      HINT[s.id] = "solution";
+      ta.value = s.run.join("\n"); ta.focus();
+      show(`<div class="small">🔓 Commande exacte insérée. Validation ainsi : <b>${PTS.solution} pts</b> (l'important reste de comprendre pourquoi).</div>`);
+    }
+  }));
+  $("[data-check]", card).onclick = () => checkStep(s.id);
+  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) checkStep(s.id); });
+}
+
+async function checkStep(id) {
+  const card = $(`#step-${id}`); if (!card || BUSY) return;
+  const ta = $("[data-cmd]", card), cmd = ta.value.trim();
+  if (!cmd) { toast("Tapez d'abord une commande"); return; }
+  BUSY = true;
+  $$("[data-check]").forEach((b) => (b.disabled = true));
+  const badge = $("[data-badge]", card), term = $("[data-term]", card);
+  badge.className = "chip run"; badge.textContent = "⏳ en cours…";
+  card.classList.remove("ok", "ko");
+  const end = await streamTo(`/api/check/${id}`, { cmd }, term).catch((e) => ({ status: "ko", code: -1, checks: [], err: e }));
+  card.classList.add(end.status);
+  badge.className = `chip ${end.status}`;
+  badge.textContent = end.status === "ok" ? "✅ validée" : "✗ critère non atteint";
+  $("[data-checks]", card).innerHTML = checksHTML(end.checks);
+  if (end.status === "ok") {
+    const method = HINT[id] || "typed";
+    award(id, method);
+    const sc = SCORE[id];
+    $("[data-pts]", card).className = "chip ok"; $("[data-pts]", card).textContent = `🏆 ${sc.points}/${STEP_MAX} pts`;
+    toast(`Étape validée · +${sc.points} pts (${{ typed: "tapé sans aide", prefill: "pré-rempli", solution: "solution" }[method]})`);
+    updateScoreBadge();
+  }
+  BUSY = false;
+  $$("[data-check]").forEach((b) => (b.disabled = false));
+  refreshStatus();
+  return end.status;
+}
+
 function tpView(view, id) {
   const tp = CATALOG.find((t) => t.id === id);
   if (!tp) { view.innerHTML = "<p>TP introuvable.</p>"; return; }
+  if (MODE === "expert") return tpViewExpert(view, tp);
   view.innerHTML = `
     <div class="row"><h1>${esc(tp.title)}</h1></div>
     <p class="sub">${esc(tp.subtitle)} · Outils : ${esc(tp.tools)}</p>
@@ -241,16 +337,18 @@ function tpView(view, id) {
     <div class="figs" style="margin-top:14px">${tp.figures.map((f) => `<div class="figure"><img src="/img/${f}" alt="" loading="lazy"></div>`).join("")}</div>
     <h2 class="row">Manipulations guidées <span class="spacer"></span>
       <button class="btn" data-runall>▶▶ Exécuter tout le TP</button></h2>
-    <p class="muted small">Chaque étape suit la démarche 🎯 Pourquoi → ▶ Faire → ✅ Vérifier. Le bloc de code reprend l'énoncé ; la console exécute sa version non interactive dans <code>dc-toolbox</code> (les secrets demandés par <code>read -rsp</code> viennent du <code>.env</code>) et contrôle automatiquement le critère ✅.</p>
+    <div class="card" style="margin-bottom:14px"><h3>Comment travailler</h3>
+      <p class="small" style="margin:0 0 10px">Pour chaque étape : lisez le 🎯 <b>pourquoi</b>, tapez les commandes <b>une par une</b> dans l'onglet <a href="#/terminal">Terminal</a> (bouton « Copier »), puis contrôlez le ✅. Remplacez les <code>&lt;valeurs&gt;</code> par ce que la commande précédente a affiché. Bloqué ? « ▶ Exécuter » lance l'étape pour vous. Les mots de passe sont derrière le bouton <a href="#" data-creds>🔑 Voir les identifiants</a>.</p>
+      ${CHEAT}</div>
     ${tp.steps.map(stepCard).join("")}
     <h2>Questions de compréhension</h2>
     <div class="card"><ol class="qs" style="margin:0">${tp.questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ol></div>
     <h2>Volet GRC — ${esc(tp.grcTitle)}</h2>
     <div class="card"><img src="/img/fig_grc_methode.png" alt="" style="max-width:520px;width:100%;background:#fff;border-radius:8px;padding:6px"><ol class="qs">${tp.grc.map((q) => `<li>${esc(q)}</li>`).join("")}</ol></div>
-    <div id="answers" ${trainer() ? "" : "hidden"}>
+    ${tp.answers?.length ? `<div id="answers" ${trainer() ? "" : "hidden"}>
       <h2>Pistes de correction (formateur)</h2>
       <div class="card answers"><ul style="padding-left:18px">${tp.answers.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>
-    </div>`;
+    </div>` : ""}`;
   view.querySelectorAll("[data-run]").forEach((b) => b.addEventListener("click", () => runStep(b.dataset.run)));
   $("[data-runall]", view).addEventListener("click", async () => {
     for (const s of tp.steps) {
@@ -259,6 +357,115 @@ function tpView(view, id) {
       if (st !== "ok") { toast(`Arrêt à l'étape ${s.num} : critère non atteint`); break; }
     }
   });
+}
+
+// ---- reconnaissance (mode expert) : ce qu'un attaquant peut constater AVANT de sécuriser
+const RECON = {
+  tp1: {
+    intro: "Avant de tout mettre sous clé, mettez-vous à la place d'un attaquant : où traînent les secrets et les données en clair ? Chaque constat justifie une mesure de la phase 2.",
+    items: [
+      { t: "Mots de passe en clair dans le vieux script (état : au repos, dans le code)", c: `grep -nE "PASS|SECRET|KEY|URL" /lab/scripts/legacy/ingest_legacy.sh` },
+      { t: "IBAN lisibles dans le fichier de la base sur le disque (état : au repos)", link: "#/crypto/rest" },
+      { t: "Mot de passe qui circule : chiffré (TLS) ou en clair ? (état : en transit)", link: "#/crypto/transit" },
+    ],
+  },
+  tp2: {
+    intro: "Un compte peut être authentifié (TP1) mais voir bien trop de choses. Constatez ce qu'un analyste ou un curieux peut lire de trop, avant de poser les bonnes barrières.",
+    items: [
+      { t: "La classification dit ce qui est sensible : sait-on qui devrait y accéder ?", c: `sql "SELECT table_name, column_name, niveau FROM gouvernance.classification_donnees WHERE niveau='RESTREINT'"` },
+      { t: "Un analyste (Bruno) peut-il lire toute la table RH, NIR et salaires compris ?", c: `sql-as bruno "SELECT nom, nir, salaire_brut_annuel FROM rh.employes LIMIT 3" 2>&1 || echo "(refusé = déjà sécurisé)"` },
+      { t: "Données au repos dans le stockage objet (état : au repos)", link: "#/crypto/rest" },
+    ],
+  },
+  tp3: {
+    intro: "Un attaquant agit… puis efface ses traces. Constatez d'abord qu'il n'y a presque rien de journalisé, avant d'installer l'audit et le coffre de preuves ineffaçable.",
+    items: [
+      { t: "Rejouer une « nuit agitée » d'incidents (simulation formateur)", c: `/lab/scripts/simulate-incidents.sh` },
+      { t: "Que reste-t-il comme traces des accès refusés ?", c: `logs minio; logs vault` },
+      { t: "Sans coffre WORM, peut-on effacer une preuve ? (à retester après la phase 2)", c: `mc ls --recursive dc/audit-logs 2>&1 | tail -3 || echo "(pas encore de coffre : c'est justement le problème)"` },
+    ],
+  },
+};
+
+function tpViewExpert(view, tp) {
+  const rec = RECON[tp.id] || { intro: "", items: [] };
+  const done = tp.steps.filter((s) => SCORE[s.id]).length;
+  const got = tp.steps.reduce((a, s) => a + (SCORE[s.id]?.points || 0), 0);
+  const max = tp.steps.length * STEP_MAX;
+  view.innerHTML = `
+    <div class="row"><h1>${esc(tp.title)}</h1><span class="spacer"></span><span class="chip crypto">🕵️ Mode Expert · noté</span></div>
+    <p class="sub">${esc(tp.subtitle)} · Outils : ${esc(tp.tools)}</p>
+    <div class="grid g2">
+      <div class="card"><h3>Contexte</h3><p style="margin:0">${esc(tp.context)}</p></div>
+      <div class="card"><h3>Le cours en bref</h3><ul class="course" style="margin:0;padding-left:18px">${tp.course.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>
+        <div class="row" style="margin-top:10px"><a class="btn sm" href="#/terminal">Terminal libre</a><button class="btn sm" data-creds>🔑 Identifiants</button><a class="btn sm" href="#/score">🏆 Mon score</a></div></div>
+    </div>
+
+    <h2 class="row">🕵️ Phase 1 — Reconnaissance <span class="spacer"></span><span class="chip">non noté</span></h2>
+    <div class="card">
+      <p class="small" style="margin:0 0 10px">${esc(rec.intro)}</p>
+      ${rec.items.map((it, i) => `<div class="recon">
+        <div class="row"><span class="chip">${i + 1}</span><b>${esc(it.t)}</b><span class="spacer"></span>
+          ${it.link ? `<a class="btn sm primary" href="${it.link}">Ouvrir la démo ↗</a>` : `<button class="btn sm primary" data-recon="${i}">▶ Constater</button>`}</div>
+        ${it.link ? "" : `<div class="term" data-recterm="${i}" hidden></div>`}</div>`).join("")}
+    </div>
+
+    <h2 class="row">🛡️ Phase 2 — Sécuriser (à vous de taper les commandes) <span class="spacer"></span>
+      <span class="chip">${done}/${tp.steps.length} · ${got}/${max} pts</span></h2>
+    <div class="card" style="margin-bottom:14px"><h3>Comment ça marche</h3>
+      <p class="small" style="margin:0 0 10px">Pour chaque étape : lisez l'objectif ✅, <b>tapez votre commande</b> dans le cadre puis « Valider ». Besoin d'aide ? <b>📖 Documentation</b> (gratuit), <b>⬇️ Pré-remplir</b> (${PTS.prefill} pts) ou <b>🔓 Solution</b> (${PTS.solution} pts). Tapé sans aide = <b>${PTS.typed} pts</b>. Les <code>&lt;valeurs&gt;</code> se remplacent par ce que la commande précédente affiche.</p>
+      ${CHEAT}</div>
+    ${tp.steps.map(stepCard).join("")}
+
+    <h2>Questions de compréhension</h2>
+    <div class="card"><ol class="qs" style="margin:0">${tp.questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ol></div>
+    <h2>Volet GRC — ${esc(tp.grcTitle)}</h2>
+    <div class="card"><img src="/img/fig_grc_methode.png" alt="" style="max-width:520px;width:100%;background:#fff;border-radius:8px;padding:6px"><ol class="qs">${tp.grc.map((q) => `<li>${esc(q)}</li>`).join("")}</ol></div>`;
+  rec.items.forEach((it, i) => { if (it.link) return;
+    const b = view.querySelector(`[data-recon="${i}"]`);
+    b.onclick = async () => { const t = view.querySelector(`[data-recterm="${i}"]`); t.hidden = false; b.disabled = true;
+      await streamTo("/api/exec", { cmd: it.c }, t); b.disabled = false; };
+  });
+  tp.steps.forEach((s) => wireExpertStep(s, $(`#step-${s.id}`, view)));
+}
+
+// ---- score view
+function scoreView(view) {
+  const rows = [];
+  let got = 0, max = 0;
+  for (const tp of CATALOG) for (const s of tp.steps) {
+    const sc = SCORE[s.id]; max += STEP_MAX; got += sc?.points || 0;
+    rows.push({ tp: tp.id.toUpperCase(), num: s.num, title: s.title, sc });
+  }
+  const pct = max ? Math.round((100 * got) / max) : 0;
+  const label = { typed: "tapé sans aide", prefill: "pré-rempli", solution: "solution" };
+  const medal = pct >= 90 ? "🥇 Expert confirmé" : pct >= 70 ? "🥈 Bon niveau" : pct >= 40 ? "🥉 En progrès" : "🔰 Débutant";
+  view.innerHTML = `
+    <h1>🏆 Mon score</h1>
+    <p class="sub">Barème personnel du mode Expert (${esc(fullName())}). Enregistré dans ce navigateur.</p>
+    <div class="card scoretop">
+      <div><div class="bignum">${got} <span class="muted" style="font-size:18px">/ ${max} pts</span></div>
+        <div class="progress" style="margin:8px 0"><i style="width:${pct}%"></i></div>
+        <div class="small muted">${pct}% · ${medal}</div></div>
+    </div>
+    <div class="tablewrap"><table class="acc"><thead><tr><th>TP</th><th>Étape</th><th>Méthode</th><th style="text-align:right">Points</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td>${r.tp}</td><td>${r.num}. ${esc(r.title)}</td>
+        <td>${r.sc ? label[r.sc.method] : "<span class='muted'>—</span>"}</td>
+        <td style="text-align:right"><b class="${r.sc ? (r.sc.points >= PTS.typed ? "n good" : "") : "muted"}">${r.sc ? r.sc.points : 0}</b> / ${STEP_MAX}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="row" style="margin-top:14px"><span class="muted small">Barème : tapé sans aide ${PTS.typed} · pré-rempli ${PTS.prefill} · solution ${PTS.solution} pts par étape.</span>
+      <span class="spacer"></span><button class="btn sm" id="scoreReset">Réinitialiser mon score</button></div>`;
+  $("#scoreReset").onclick = () => { if (!confirm("Effacer votre score personnel ?")) return; SCORE = {}; saveScore(); updateScoreBadge(); scoreView(view); };
+}
+
+function updateScoreBadge() {
+  const nav = $("#navScore"); if (!nav) return;
+  nav.hidden = MODE !== "expert";
+  if (MODE === "expert") {
+    let got = 0, max = 0;
+    for (const tp of CATALOG) for (const s of tp.steps) { max += STEP_MAX; got += SCORE[s.id]?.points || 0; }
+    nav.innerHTML = `🏆 Mon score<em>${got}/${max}</em>`;
+  }
 }
 
 document.addEventListener("click", (e) => {
@@ -406,7 +613,7 @@ function appView(view) {
         <dt>DEK chiffrée</dt><dd>${esc(r.dekWrapped)}</dd>
         <dt>Nonce</dt><dd>${esc(r.nonce)}</dd>
         <dt>Données</dt><dd>${esc(r.ciphertext)}</dd>
-        <dt>Relu</dt><dd style="color:#86efac">${esc(r.decrypted)}</dd></dl>
+        <dt>Relu</dt><dd style="color:var(--c-ok)">${esc(r.decrypted)}</dd></dl>
         <div class="small muted" style="margin-top:6px">Ce qui est stocké sur disque :</div><pre class="hex">${esc(JSON.stringify(r.stored, null, 1))}</pre>`;
     } catch (e) { toast(e.message); }
   };
@@ -435,7 +642,7 @@ function renderCTs() {
   box.innerHTML = CTS.map((c, i) => `<div class="ct">
     <div class="row"><span class="ver">${esc(c.ct.split(":")[1])}</span><span class="small muted">clair : ${esc(c.pt)}</span><span class="spacer"></span>
       <button class="btn sm" data-dec="${i}">Déchiffrer</button><button class="btn sm" data-rew="${i}">Rewrap</button></div>
-    <code>${esc(c.ct)}</code>${c.out ? `<div class="small" style="margin-top:4px;color:#86efac">${esc(c.out)}</div>` : ""}</div>`).join("") || `<p class="muted small">Aucun chiffré pour l'instant.</p>`;
+    <code>${esc(c.ct)}</code>${c.out ? `<div class="small" style="margin-top:4px;color:var(--c-ok)">${esc(c.out)}</div>` : ""}</div>`).join("") || `<p class="muted small">Aucun chiffré pour l'instant.</p>`;
   box.querySelectorAll("[data-dec]").forEach((b) => (b.onclick = async () => {
     const c = CTS[b.dataset.dec];
     try { const r = await post("/api/transit/decrypt", { ciphertext: c.ct }); c.out = `déchiffré → ${r.decoded}`; } catch (e) { c.out = "✗ " + e.message; }
@@ -520,7 +727,7 @@ let ACCESS = [];
 function accessView(view) {
   view.innerHTML = `
     <h1>🔑 Accès aux services</h1>
-    <p class="sub">Identifiants lus à la demande dans le <code>.env</code> (comptes d'amorçage) et dans Vault (comptes nominatifs créés aux TP1-TP2). Masqués par défaut : cette page n'est servie que sur <code>127.0.0.1</code>.</p>
+    <p class="sub">Identifiants lus à la demande dans le <code>.env</code> (comptes d'amorçage) et dans Vault (comptes nominatifs créés aux TP1-TP2). Masqués par défaut.</p>
     <div class="row" style="margin-bottom:12px"><button class="btn" id="accReload">↻ Relire</button><button class="btn" id="accShowAll">Tout afficher</button>
       <span class="muted small">Certificats signés par la CA du lab : acceptez l'avertissement du navigateur ou importez <code>ca.crt</code> (volume certs).</span></div>
     <div id="accOut"><p class="muted">Lecture de Vault…</p></div>
@@ -544,7 +751,8 @@ function accessView(view) {
         <dt>Chemin Vault</dt><dd>${esc(r.path)}</dd><dt>Utilisateur</dt><dd>${esc(r.username)}</dd>
         <dt>Mot de passe</dt><dd><span class="secret">${esc(r.password)}</span></dd>
         <dt>Expire dans</dt><dd>${Math.round(r.ttl / 60)} min</dd><dt>Bail</dt><dd class="small">${esc(r.lease)}</dd></dl>
-        <div class="small muted" style="margin-top:6px">Révocation immédiate : <code>vault lease revoke ${esc(r.lease)}</code></div></div>`);
+        <div class="small muted" style="margin-top:6px">Révocation immédiate : <code>vault lease revoke ${esc(r.lease)}</code></div>
+        ${b.dataset.dyn === "rabbitmq" ? `<div class="small" style="color:var(--c-warn);margin-top:4px">Ce compte sert au pipeline (connexion AMQPS) : il ne peut pas ouvrir l'interface web RabbitMQ. C'est voulu (moindre privilège).</div>` : ""}</div>`);
     } catch (e) { toast(e.message); }
   }));
   load();
@@ -553,13 +761,13 @@ function accessView(view) {
 function renderAccess(showAll) {
   $("#accOut").innerHTML = ACCESS.map((s, si) => `<div class="card" style="margin-bottom:14px">
     <div class="row"><h3 style="margin:0">${esc(s.name)}</h3><span class="spacer"></span>
-      ${s.url ? `<a class="btn sm primary" href="${esc(s.url)}" target="_blank" rel="noopener">Ouvrir ${esc(s.url)}</a>` : `<span class="chip">non exposé sur l'hôte</span>`}</div>
+      ${s.url ? `<a class="btn sm primary" href="${esc(s.url)}" target="_blank" rel="noopener">Ouvrir ${esc(s.url)}</a>` : `<span class="chip">interne au lab</span>`}</div>
     <div class="small muted mono" style="margin-top:4px">${esc(s.internal)}</div>
     <p class="small" style="margin:6px 0 0">${esc(s.note)}</p>
     ${s.accounts.length ? `<div class="tablewrap"><table class="acc"><thead><tr><th>Identifiant</th><th>Rôle</th><th>Secret</th><th></th><th>Source</th></tr></thead><tbody>
       ${s.accounts.map((a, ai) => `<tr><td class="mono">${esc(a.login)}</td><td>${esc(a.role || "")}</td>
         <td><span class="secret ${showAll ? "" : "masked"}" data-sec="${si}:${ai}">${showAll ? esc(a.secret) : "••••••••••"}</span>
-          ${a.warning ? `<div class="small" style="color:#fbbf24">⚠ ${esc(a.warning)}</div>` : ""}</td>
+          ${a.warning ? `<div class="small" style="color:var(--c-warn)">⚠ ${esc(a.warning)}</div>` : ""}</td>
         <td style="white-space:nowrap"><button class="btn sm" data-eye="${si}:${ai}">👁</button> <button class="btn sm" data-cp="${si}:${ai}">Copier</button></td>
         <td class="small muted">${esc(a.source)}</td></tr>`).join("")}
     </tbody></table></div>` : `<p class="muted small">Aucun compte : exécutez d'abord le TP correspondant.</p>`}</div>`).join("");
@@ -572,6 +780,93 @@ function renderAccess(showAll) {
     navigator.clipboard?.writeText(acc(b.dataset.cp).secret).then(() => toast("Copié"), () => toast("Copie impossible (contexte non sécurisé)"))));
 }
 
+// ---------------------------------------------------------------- aide-mémoire
+const CHEAT = `<dl class="cheat">
+  <dt>sql "SELECT …"</dt><dd>requête SQL en administrateur (mot de passe lu dans Vault)</dd>
+  <dt>sql -f fichier.sql</dt><dd>exécute un fichier SQL</dd>
+  <dt>sql-as bruno "SELECT …"</dt><dd>requête en tant qu'alice, bruno, claire, david, samira ou nadia (TP2+)</dd>
+  <dt>vault status</dt><dd>état du coffre (Sealed true = fermé)</dd>
+  <dt>vault-cles</dt><dd>les 5 clés d'ouverture et le jeton root</dd>
+  <dt>cat fichier</dt><dd>lire un script ou un fichier SQL avant de le lancer</dd>
+  <dt>logs tout</dt><dd>journaux d'audit lisibles : <code>logs audit</code>, <code>logs echecs</code>, <code>logs minio</code>, <code>logs vault</code> (TP3)</dd>
+  <dt>$POSTGRES_PASSWORD …</dt><dd>les mots de passe du fichier .env sont déjà dans des variables</dd>
+</dl>`;
+
+// ---------------------------------------------------------------- identifiants (fenêtre)
+async function showCreds() {
+  const dlg = $("#creds"), out = $("#credsOut");
+  out.innerHTML = `<p class="muted">Lecture…</p>`;
+  if (!dlg.open) dlg.showModal();
+  let c;
+  try { c = await api("/api/credentials"); } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  const CREDS = [...c.vault, ...c.env];
+  const row = (x, i) => `<tr><td>${esc(x.label)}</td>
+    <td><span class="secret ${x.secret ? "masked" : ""}" data-cv="${i}">${x.secret ? "••••••••••" : esc(x.value)}</span>${x.hint ? `<div class="hint">${esc(x.hint)}</div>` : ""}</td>
+    <td>${x.secret ? `<button class="btn sm" data-ce="${i}">👁</button> ` : ""}<button class="btn sm" data-cc="${i}">Copier</button></td></tr>`;
+  out.innerHTML = `
+    <h3>Vault</h3>
+    <div class="row" style="margin-bottom:8px"><a class="btn primary sm" href="${esc(c.vault_url)}" target="_blank" rel="noopener">Ouvrir Vault UI ↗</a>
+      <span class="muted small">${esc(c.vault_url)}</span></div>
+    ${c.initialized ? `<table class="creds"><tbody>${c.vault.map((x, i) => row(x, i)).join("")}</tbody></table>
+      <p class="muted small">Il faut ${c.threshold} clés sur ${c.vault.length - 1} pour ouvrir le coffre. En entreprise, chaque clé est confiée à une personne différente.</p>`
+      : `<p class="muted small">Vault n'est pas encore initialisé : faites le <a href="#/tp/tp1">TP1 · étape 2</a>. Le jeton root et les 5 clés apparaîtront ici.</p>`}
+    <h3>Comptes administrateur (fichier .env)</h3>
+    <div class="row" style="margin-bottom:8px"><a class="btn sm" href="${esc(c.minio_url)}" target="_blank" rel="noopener">Ouvrir MinIO ↗</a>
+      <a class="btn sm" href="${esc(c.rabbitmq_url)}" target="_blank" rel="noopener">Ouvrir RabbitMQ ↗</a></div>
+    <table class="creds"><tbody>${c.env.map((x, i) => row(x, i + c.vault.length)).join("")}</tbody></table>
+    <p class="muted small">Personnes du TP2 (alice, bruno…) : page <a href="#/access">Accès aux services</a>.</p>`;
+  out.querySelectorAll("[data-ce]").forEach((b) => (b.onclick = () => {
+    const el = out.querySelector(`[data-cv="${b.dataset.ce}"]`), hidden = el.classList.toggle("masked");
+    el.textContent = hidden ? "••••••••••" : CREDS[b.dataset.ce].value;
+  }));
+  out.querySelectorAll("[data-cc]").forEach((b) => (b.onclick = () =>
+    navigator.clipboard?.writeText(CREDS[b.dataset.cc].value).then(() => toast("Copié"), () => toast("Copie impossible"))));
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-creds]")) { e.preventDefault(); showCreds(); }
+});
+
+// ---------------------------------------------------------------- identification (nom / prénom)
+function loadMe() { try { ME = JSON.parse(localStorage.getItem("etudiant") || "null"); } catch { ME = null; } }
+function askName() {
+  return new Promise((resolve) => {
+    const dlg = $("#ident");
+    $("#idPrenom").value = ME?.prenom || ""; $("#idNom").value = ME?.nom || "";
+    $("#identForm").onsubmit = (e) => {
+      e.preventDefault();
+      const prenom = $("#idPrenom").value.trim(), nom = $("#idNom").value.trim();
+      if (!prenom || !nom) return;
+      ME = { prenom, nom };
+      try { localStorage.setItem("etudiant", JSON.stringify(ME)); } catch {}
+      dlg.close(); showMe(); resolve();
+    };
+    dlg.addEventListener("cancel", (e) => { if (!ME) e.preventDefault(); });
+    dlg.showModal(); $("#idPrenom").focus();
+  });
+}
+function showMe() {
+  const m = MODE === "expert" ? "🕵️ Expert" : "🎓 Facile";
+  $("#whoami").innerHTML = `${esc(fullName())} · <a href="#" id="changeMode">${m}</a> · <a href="#" id="changeMe">nom</a>`;
+  $("#changeMode").onclick = (e) => { e.preventDefault(); askMode(); };
+  $("#changeMe").onclick = (e) => { e.preventDefault(); askName(); };
+}
+
+// ---------------------------------------------------------------- mode facile / expert
+function loadMode() { try { MODE = localStorage.getItem("mode") === "expert" ? "expert" : (localStorage.getItem("mode") === "facile" ? "facile" : ""); } catch { MODE = ""; } }
+function applyMode(m) {
+  MODE = m; try { localStorage.setItem("mode", m); } catch {}
+  document.body.dataset.mode = m;
+  showMe(); updateScoreBadge();
+}
+function askMode() {
+  return new Promise((resolve) => {
+    const dlg = $("#mode");
+    $$("[data-mode-set]", dlg).forEach((b) => (b.onclick = () => { applyMode(b.dataset.modeSet); dlg.close(); route(); resolve(); }));
+    dlg.addEventListener("cancel", (e) => { if (!MODE) e.preventDefault(); });
+    dlg.showModal();
+  });
+}
+
 // ---------------------------------------------------------------- terminal
 const QUICK = [
   ["check-stack", "/lab/scripts/check-stack.sh"],
@@ -580,15 +875,17 @@ const QUICK = [
   ["moteurs Vault", "vault secrets list"],
   ["baux actifs", "vault list sys/leases/lookup/database/creds/app-ingest 2>&1"],
   ["pipeline (50 tx)", "/lab/scripts/with-vault-creds.sh python3 /lab/pipeline/producer.py 50 && /lab/scripts/with-vault-creds.sh python3 /lab/pipeline/consumer.py"],
-  ["dernières transactions", `/lab/scripts/pg-admin.sh -c "SELECT reference, left(iban_contrepartie,32) AS iban, ingere_par FROM finance.transactions ORDER BY id DESC LIMIT 5"`],
+  ["dernières transactions", `sql "SELECT reference, left(iban_contrepartie,32) AS iban, ingere_par FROM finance.transactions ORDER BY id DESC LIMIT 5"`],
+  ["clés Vault", "vault-cles"],
   ["buckets MinIO", "mc ls dc; for b in raw-data curated audit-logs; do mc encrypt info dc/$b 2>&1 | tail -1; done"],
-  ["TLS PostgreSQL", `/lab/scripts/pg-admin.sh -c "SELECT ssl, version, cipher, bits FROM pg_stat_ssl WHERE pid = pg_backend_pid()"`],
+  ["TLS PostgreSQL", `sql "SELECT ssl, version, cipher, bits FROM pg_stat_ssl WHERE pid = pg_backend_pid()"`],
   ["certificat Vault", "openssl s_client -connect vault:8200 -CAfile /certs/ca.crt </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates -ext subjectAltName"],
 ];
 function terminalView(view) {
   view.innerHTML = `
     <h1>Terminal toolbox</h1>
-    <p class="sub">Commandes exécutées dans <code>dc-toolbox</code> (mêmes outils que <code>docker compose exec toolbox bash</code>). La fonction <code>as &lt;login&gt; "SQL"</code> du TP2 est disponible.</p>
+    <p class="sub">Votre poste de travail : chaque commande s'exécute dans la toolbox du lab. Une commande par ligne ; Ctrl+Entrée pour lancer.</p>
+    <details class="card" style="margin-bottom:12px"><summary><b>Aide-mémoire des commandes</b></summary><div style="margin-top:10px">${CHEAT}</div></details>
     <div class="row" style="margin-bottom:10px">${QUICK.map(([l], i) => `<button class="btn sm" data-q="${i}">${esc(l)}</button>`).join("")}</div>
     <div class="row"><textarea id="cmd" rows="3" style="flex:1" placeholder="vault status">vault status</textarea>
       <button class="btn primary" id="cmdGo" style="align-self:stretch">▶ Exécuter<br><span class="small muted">Ctrl+Entrée</span></button></div>
@@ -604,11 +901,29 @@ function terminalView(view) {
   view.querySelectorAll("[data-q]").forEach((b) => (b.onclick = () => { $("#cmd").value = QUICK[b.dataset.q][1]; run(); }));
 }
 
+// ---------------------------------------------------------------- thème clair / sombre
+function setTheme(t) {
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  else { delete document.documentElement.dataset.theme; t = "auto"; }
+  try { localStorage.setItem("theme", t); } catch {}
+  document.querySelectorAll("[data-theme-set]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeSet === t)));
+}
+document.querySelectorAll("[data-theme-set]").forEach((b) => (b.onclick = () => setTheme(b.dataset.themeSet)));
+setTheme(document.documentElement.dataset.theme || "auto");
+
 // ---------------------------------------------------------------- démarrage
 (async function init() {
   try { $("#trainer").checked = localStorage.getItem("trainer") === "1"; } catch {}
   $("#trainer").addEventListener("change", () => { try { localStorage.setItem("trainer", trainer() ? "1" : "0"); } catch {} });
+  loadMe(); loadMode(); loadScore();
+  if (!ME) await askName(); else showMe();
+  INFO = await api("/api/info").catch(() => ({}));
+  if (INFO.student_mode) { $("#trainerToggle").hidden = true; $("#trainer").checked = false; }
+  $("#credsBtn").onclick = showCreds;
+  $("#credsClose").onclick = () => $("#creds").close();
   CATALOG = await api("/api/catalog");
+  if (!MODE) await askMode(); else applyMode(MODE);
+  updateScoreBadge();
   await refreshStatus();
   window.addEventListener("hashchange", route);
   route();

@@ -9,7 +9,7 @@
 | **Durée** | 3 h 30 |
 | **Modalité** | Binôme, sur la stack des TP1 et TP2 (sinon, le formateur lance `./solutions/run.sh tp2`) |
 | **Rendu** | Compte rendu de 2 pages : une capture par étape ✅, la chronologie de l'incident et la fiche GRC du §6.3 |
-| **Outils** | pgAudit, journal d'audit Vault, webhook d'audit MinIO, `jq`, `detect.py` |
+| **Outils** | pgAudit, journal d'audit Vault, webhook d'audit MinIO, `logs`, `detect.py` |
 
 ## Contexte
 
@@ -31,7 +31,7 @@ Mercredi matin, la supervision signale une nuit agitée : connexions ratées en 
 | **pgAudit** (PostgreSQL) | Qui a lu ou modifié une table sensible, combien de lignes | `/logs/postgres/postgresql.json` |
 | **Audit Vault** (activé au TP1) | Qui a demandé quel secret | `/logs/vault/audit.log` |
 | **Webhook MinIO** | Qui a lu ou écrit quel fichier | `/logs/minio/audit.jsonl` |
-| **jq** | Filtrer du JSON en ligne de commande | `jq 'select(.user=="bruno")' fichier` |
+| **logs** | Lire ces journaux sans écrire de filtre | `logs audit`, `logs echecs`, `logs minio`, `logs vault` |
 | **detect.py** | Règles de détection → alertes classées | `python3 /lab/scripts/detect.py` |
 
 Une ligne pgAudit se lit ainsi : `AUDIT: OBJECT,1,1,READ,SELECT,TABLE,rh.employes,"SELECT …",<not logged>,200`, soit un accès **objet**, en **lecture**, sur **rh.employes**, avec la requête, **sans** les valeurs, et **200 lignes** lues.
@@ -46,37 +46,56 @@ Une ligne pgAudit se lit ainsi : `AUDIT: OBJECT,1,1,READ,SELECT,TABLE,rh.employe
 
 ## 4. Manipulations guidées
 
-Démarche à chaque étape : **🎯 Pourquoi → ▶ Faire → ✅ Vérifier**. Tout se passe dans la toolbox. Si Vault est scellé : `/lab/scripts/vault-unseal.sh`.
+**Où taper les commandes ?** Dans l'onglet **Terminal** de la console web (adresse donnée par le formateur ; entrez votre prénom et votre nom). Une commande par ligne, Ctrl+Entrée pour lancer. Remplacez chaque `<valeur>` par ce que la commande précédente a affiché. Le bouton **🔑 Voir les identifiants** donne tous les mots de passe du lab et les liens vers Vault, MinIO et RabbitMQ.
+
+Chaque étape suit la même démarche : **🎯 Pourquoi → ▶ Faire → ✅ Vérifier**. Faites une capture de chaque ✅.
+
+**Aide-mémoire**
+
+| Commande | À quoi elle sert |
+|---|---|
+| `sql "SELECT …"` | une requête SQL en administrateur (le mot de passe est lu dans Vault) |
+| `sql -f fichier.sql` | exécuter un fichier SQL |
+| `sql-as bruno "SELECT …"` | une requête **en tant que** alice, bruno, claire, david, samira ou nadia (à partir du TP2) |
+| `vault status` | état du coffre (`Sealed true` = fermé) |
+| `vault-cles` | les 5 clés d'ouverture et le jeton root de Vault |
+| `cat fichier` | lire un script avant de le lancer |
+| `logs tout` | les journaux d'audit, lisibles (`logs audit`, `logs echecs`, `logs minio`, `logs vault`) |
+| `$POSTGRES_PASSWORD`… | les mots de passe du fichier `.env` sont déjà dans des variables |
 
 ### Étape 1 — Allumer l'audit PostgreSQL
 
-> 🎯 On veut tracer les accès aux tables **RESTREINT** et les changements de droits, pas tout le reste (trop de bruit).
+*Samira*
+
+> 🎯 On veut tracer les accès aux tables RESTREINT et les changements de droits, pas tout le reste (trop de bruit).
 
 ```bash
-less /lab/scripts/sql/tp3/01-audit.sql                     # repérez le rôle "auditeur"
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp3/01-audit.sql
-as() { u=$1; shift; PGPASSWORD="$(vault kv get -field=password kv/datacorp/users/pg/$u)" psql -U "$u" -c "$*"; }
-as nadia "SELECT nom, poste FROM rh.employes LIMIT 3"
-jq -c 'select((.message // "") | startswith("AUDIT")) | {timestamp, user, message}' /logs/postgres/postgresql.json | tail -2
+cat /lab/scripts/sql/tp3/01-audit.sql              # repérez le rôle « auditeur »
+sql -f /lab/scripts/sql/tp3/01-audit.sql           # active l'audit sur les tables sensibles
+sql-as nadia "SELECT nom, poste FROM rh.employes LIMIT 3"   # Nadia lit 3 fiches…
+logs audit                                         # …et le journal l'a noté
 ```
 
-✅ **Vérifier :** une ligne `AUDIT: OBJECT,…,rh.employes,…,3` au nom de `nadia` apparaît.
+✅ **Vérifier :** Une ligne « nadia  AUDIT: OBJECT,…,rh.employes,…,3 » apparaît.
 
 ### Étape 2 — Collecter MinIO et créer le coffre à preuves
 
-> 🎯 Les journaux doivent **quitter** la machine surveillée et être rangés là où personne ne peut les effacer.
+*Samira*
+
+> 🎯 Les journaux doivent quitter la machine surveillée et être rangés là où personne ne peut les effacer.
 
 ```bash
-cat /lab/scripts/setup/tp3-coffre.sh                       # webhook, bucket WORM, compte de dépôt
-/lab/scripts/setup/tp3-coffre.sh                           # AUDIT_TOKEN : voir le fichier .env
-/lab/scripts/seal-logs.sh                                  # 1re archive scellée (état de référence)
-OBJ=$(mc ls --recursive dc/audit-logs | awk '{print $NF}' | grep tar.gz | head -1)
-mc rm "dc/audit-logs/$OBJ"                                 # on essaie d'effacer une preuve…
+cat /lab/scripts/setup/tp3-coffre.sh               # lisez : collecte MinIO, coffre WORM, compte de dépôt
+/lab/scripts/setup/tp3-coffre.sh                   # met tout en place
+/lab/scripts/seal-logs.sh                          # range une 1re archive des journaux dans le coffre
+effacer-preuve                                     # on essaie de l'effacer…
 ```
 
-✅ **Vérifier :** l'effacement est **refusé** (objet protégé par la rétention).
+✅ **Vérifier :** L'effacement est refusé (objet protégé par la rétention WORM).
 
 ### Étape 3 — Rejouer l'incident
+
+*Formateur (attaquant)*
 
 > 🎯 On reproduit la « nuit agitée » pour disposer de vraies traces. Ne lisez pas le script avant d'avoir enquêté !
 
@@ -84,53 +103,50 @@ mc rm "dc/audit-logs/$OBJ"                                 # on essaie d'effacer
 /lab/scripts/simulate-incidents.sh
 ```
 
-✅ **Vérifier :** le script affiche 8 étapes et se termine par « Simulation terminée ».
+✅ **Vérifier :** Le script affiche 8 étapes et se termine par « Simulation terminée ».
 
 ### Étape 4 — Enquêter à la main
 
-> 🎯 Un bon analyste sait lire les journaux **avant** de faire confiance à un outil automatique.
+*Samira*
+
+> 🎯 Un bon analyste sait lire les journaux avant de faire confiance à un outil automatique.
+
+![](images/fig_tp3_arbre_violation.png)
 
 ```bash
-P=/logs/postgres/postgresql.json
-jq -r 'select(.state_code=="28P01") | .user' $P | sort | uniq -c          # a) mots de passe ratés, par compte
-jq -r 'select((.message // "") | startswith("AUDIT: OBJECT"))
-       | [.timestamp, .user, .message[0:110]] | @tsv' $P | tail -5         # b) lectures de tables sensibles
-jq -c 'select((.api.statusCode // 0) >= 400)
-       | {time, qui: .accessKey, api: .api.name, bucket: .api.bucket}' /logs/minio/audit.jsonl   # c) refus MinIO
-jq -c 'select(.error != null) | {time, qui: .auth.display_name, path: .request.path}' /logs/vault/audit.log  # d) refus Vault
+logs echecs      # a) mots de passe ratés, par compte (PostgreSQL)
+logs audit       # b) lectures de tables sensibles (PostgreSQL, heure de Paris)
+logs minio       # c) accès refusés sur le stockage (MinIO, heure UTC)
+logs vault       # d) demandes refusées par le coffre (Vault, heure UTC)
 ```
 
-Remplissez la **chronologie** (livrable) :
-
-| Heure (UTC) | Source | Qui | Quoi | Résultat |
-|---|---|---|---|---|
-| … | PostgreSQL | bruno | 8 mots de passe ratés | refusé |
-| … | … | … | … | … |
-
-⚠ PostgreSQL écrit l'heure de Paris (`CEST`, UTC+2), MinIO et Vault écrivent l'heure UTC (`Z`). **Convertissez tout en UTC.**
-
-✅ **Vérifier :** au moins 6 événements, dans le bon ordre.
+✅ **Vérifier :** Au moins 6 événements dans la chronologie, dans le bon ordre (tout converti en UTC : PostgreSQL écrit l'heure de Paris).
 
 ### Étape 5 — Détecter automatiquement
 
-> 🎯 On ne peut pas lire des millions de lignes à la main : on écrit des **règles** qui lèvent des alertes.
+*Samira*
+
+> 🎯 On ne peut pas lire des millions de lignes à la main : on écrit des règles qui lèvent des alertes.
 
 ```bash
 python3 /lab/scripts/detect.py
 ```
 
-✅ **Vérifier :** des alertes `CRITIQUE`, `HAUTE` et `MOYENNE` s'affichent. Comparez-les à votre chronologie de l'étape 4.
+✅ **Vérifier :** Des alertes CRITIQUE, HAUTE et MOYENNE s'affichent. Comparez-les à votre chronologie.
 
 ### Étape 6 — Sceller les preuves
 
-> 🎯 Si l'affaire va plus loin (licenciement, plainte, contrôle CNIL), il faudra prouver que les journaux n'ont **pas été modifiés**.
+*Samira → Claire*
+
+> 🎯 Si l'affaire va plus loin (licenciement, plainte, CNIL), il faudra prouver que les journaux n'ont pas été modifiés.
 
 ```bash
-/lab/scripts/seal-logs.sh                                  # 2e archive, chaînée à la 1re
-cd /lab/work/scelles && sha256sum -c ./*.sha256 && cat chaine.txt
+/lab/scripts/seal-logs.sh                          # 2e archive, reliée à la 1re
+cd /lab/work/scelles && sha256sum -c *.sha256      # chaque archive est intacte ? (OK)
+cat /lab/work/scelles/chaine.txt                   # la chaîne des empreintes
 ```
 
-✅ **Vérifier :** chaque archive affiche `OK`, et `chaine.txt` contient 2 maillons.
+✅ **Vérifier :** Chaque archive affiche OK, et chaine.txt contient 2 lignes.
 
 ## 5. Questions de compréhension
 

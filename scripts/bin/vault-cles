@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  vault-cles : affiche les 5 clés d'ouverture et le jeton administrateur (root)
+#  créés par « vault operator init » (TP1 · étape 2).
+#  ⚠ Raccourci de lab : en entreprise, chaque clé est donnée à une personne différente.
+# =============================================================================
+F=/lab/work/vault-init.json
+[ -s "$F" ] || { echo "Vault n'est pas encore initialisé (TP1 · étape 2)." >&2; exit 1; }
+i=1
+for k in $(jq -r '.unseal_keys_b64[]' "$F"); do echo "Clé $i        : $k"; i=$((i + 1)); done
+echo "Jeton root   : $(jq -r .root_token "$F")"
+echo "Il faut $(jq -r .unseal_threshold "$F") clés sur $(jq -r .unseal_shares "$F") pour ouvrir le coffre."

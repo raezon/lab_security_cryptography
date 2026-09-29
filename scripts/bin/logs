@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  logs <quoi> : lit les journaux d'audit sans écrire de requête jq (TP3)
+#    logs audit        dernières lectures de tables sensibles (PostgreSQL / pgAudit)
+#    logs echecs       mots de passe ratés, par compte (PostgreSQL)
+#    logs minio        accès refusés sur le stockage (MinIO)
+#    logs vault        demandes refusées par le coffre (Vault)
+#    logs tout         les quatre à la suite
+#  Heures : PostgreSQL = heure de Paris ; MinIO et Vault = UTC (suffixe Z).
+# =============================================================================
+PG=/logs/postgres/postgresql.json; MINIO=/logs/minio/audit.jsonl; VAULT=/logs/vault/audit.log
+audit()  { echo "== Lectures de tables sensibles (heure de Paris)"
+           jq -r 'select((.message // "") | startswith("AUDIT: OBJECT")) | "\(.timestamp)  \(.user)  \(.message[0:100])"' "$PG" | tail -${N:-8}; }
+echecs() { echo "== Mots de passe ratés, par compte (PostgreSQL)"
+           jq -r 'select(.state_code=="28P01") | .user' "$PG" | sort | uniq -c; }
+minio()  { echo "== Accès refusés sur MinIO (heure UTC)"
+           [ -s "$MINIO" ] || { echo "(journal vide : faites d'abord TP3 · étape 2)"; return; }
+           jq -r 'select((.api.statusCode // 0) >= 400) | "\(.time)  \(.accessKey)  \(.api.name)  bucket=\(.api.bucket)  code=\(.api.statusCode)"' "$MINIO" | tail -${N:-8}; }
+vault_() { echo "== Demandes refusées par Vault (heure UTC)"
+           jq -r 'select(.error != null) | "\(.time)  \(.auth.display_name // "?")  \(.request.path)  \(.error | gsub("\\s+"; " "))"' "$VAULT" | tail -${N:-5}; }
+case "${1:-}" in
+  audit) audit ;; echecs) echecs ;; minio) minio ;; vault) vault_ ;;
+  tout) echecs; echo; audit; echo; minio; echo; vault_ ;;
+  *) sed -n '3,9p' "$0" | sed 's/^#  //'; exit 2 ;;
+esac

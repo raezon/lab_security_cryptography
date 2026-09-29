@@ -49,99 +49,126 @@ Dans le binôme : l'un joue Alice (technique), l'autre Claire (règles et tests 
 
 ## 4. Manipulations guidées
 
-Démarche à chaque étape : **🎯 Pourquoi → ▶ Faire → ✅ Vérifier**. Tout se passe dans la toolbox (`docker compose exec toolbox bash`). Si Vault est scellé : `/lab/scripts/vault-unseal.sh`.
+**Où taper les commandes ?** Dans l'onglet **Terminal** de la console web (adresse donnée par le formateur ; entrez votre prénom et votre nom). Une commande par ligne, Ctrl+Entrée pour lancer. Remplacez chaque `<valeur>` par ce que la commande précédente a affiché. Le bouton **🔑 Voir les identifiants** donne tous les mots de passe du lab et les liens vers Vault, MinIO et RabbitMQ.
+
+Chaque étape suit la même démarche : **🎯 Pourquoi → ▶ Faire → ✅ Vérifier**. Faites une capture de chaque ✅.
+
+**Aide-mémoire**
+
+| Commande | À quoi elle sert |
+|---|---|
+| `sql "SELECT …"` | une requête SQL en administrateur (le mot de passe est lu dans Vault) |
+| `sql -f fichier.sql` | exécuter un fichier SQL |
+| `sql-as bruno "SELECT …"` | une requête **en tant que** alice, bruno, claire, david, samira ou nadia (à partir du TP2) |
+| `vault status` | état du coffre (`Sealed true` = fermé) |
+| `vault-cles` | les 5 clés d'ouverture et le jeton root de Vault |
+| `cat fichier` | lire un script avant de le lancer |
+| `logs tout` | les journaux d'audit, lisibles (`logs audit`, `logs echecs`, `logs minio`, `logs vault`) |
+| `$POSTGRES_PASSWORD`… | les mots de passe du fichier `.env` sont déjà dans des variables |
 
 ### Étape 1 — Lire la politique de la DPO
 
-> 🎯 On ne crée pas de droits au hasard : on part de la **classification** des données faite par la DPO.
+*Claire (DPO)*
+
+> 🎯 On ne crée pas de droits au hasard : on part de la classification des données faite par la DPO.
 
 ```bash
-/lab/scripts/pg-admin.sh -c "SELECT table_name, column_name, niveau, traitement_requis
-  FROM gouvernance.classification_donnees WHERE schema_name = 'rh' ORDER BY niveau DESC"
+sql "SELECT * FROM gouvernance.classification_donnees WHERE schema_name = 'rh' ORDER BY niveau DESC"
 ```
 
-✅ **Vérifier :** vous savez quelles colonnes sont `RESTREINT` (NIR, IBAN, salaire) et ce qu'il faut en faire (SUPPRIMER, CHIFFRER, GÉNÉRALISER…).
+✅ **Vérifier :** Vous savez quelles colonnes sont RESTREINT (NIR, IBAN, salaire) et ce qu'il faut en faire.
 
 ### Étape 2 — Créer les rôles, puis les comptes
 
-> 🎯 D'abord les rôles (**ce que l'on fait**), ensuite les personnes (**qui l'on est**).
+*Alice*
+
+> 🎯 D'abord les rôles (ce que l'on fait), ensuite les personnes (qui l'on est).
 
 ```bash
-less /lab/scripts/sql/tp2/01-roles.sql                     # lisez les GRANT : un bloc par rôle
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/01-roles.sql
-/lab/scripts/setup/tp2-comptes.sh                          # 6 comptes, mots de passe rangés dans Vault
-# petite fonction pour agir « en tant que » quelqu'un :
-as() { u=$1; shift; PGPASSWORD="$(vault kv get -field=password kv/datacorp/users/pg/$u)" psql -U "$u" -c "$*"; }
+cat /lab/scripts/sql/tp2/01-roles.sql              # lisez : un bloc de droits (GRANT) par rôle
+sql -f /lab/scripts/sql/tp2/01-roles.sql           # 1. crée les rôles
+/lab/scripts/setup/tp2-comptes.sh                  # 2. crée les 6 personnes (mots de passe rangés dans Vault)
+sql "\du"                                          # qui a quel rôle ?
 ```
 
-✅ **Vérifier :** `/lab/scripts/pg-admin.sh -c "\du"` montre `alice` membre de `r_data_engineer`, `bruno` de `r_data_analyst`, etc.
+✅ **Vérifier :** sql "\du" montre alice membre de r_data_engineer, bruno de r_data_analyst, etc.
 
 ### Étape 3 — Tester le moindre privilège
 
-> 🎯 Une règle de sécurité ne vaut que si on a **vérifié qu'elle bloque**.
+*Claire*
+
+> 🎯 Une règle de sécurité ne vaut que si on a vérifié qu'elle bloque.
 
 ```bash
-as bruno "SELECT * FROM rh.employes LIMIT 1"                       # l'analyste : refusé
-as alice "SELECT nir FROM rh.employes LIMIT 1"                     # colonne NIR : refusé
-as alice "SELECT matricule, departement FROM rh.employes LIMIT 2"  # colonnes autorisées : OK
-as david "SELECT count(*) FROM finance.transactions"               # l'admin système : refusé
+sql-as bruno "SELECT * FROM rh.employes LIMIT 1"                        # l'analyste : refusé
+sql-as alice "SELECT nir FROM rh.employes LIMIT 1"                      # colonne NIR : refusé
+sql-as alice "SELECT matricule, departement FROM rh.employes LIMIT 2"   # colonnes autorisées : OK
+sql-as david "SELECT count(*) FROM finance.transactions"                # l'admin système : refusé
 ```
 
-✅ **Vérifier :** 3 refus (`permission denied`) et 1 succès. Notez-les dans un tableau « test / attendu / obtenu ».
+✅ **Vérifier :** 3 refus (permission denied) et 1 succès. Notez-les dans un tableau « test / attendu / obtenu ».
 
 ### Étape 4 — Filtrer les lignes (Row Level Security)
 
-> 🎯 Nadia a besoin des fiches de **son** département, pas de toute l'entreprise.
+*Nadia (Manager RH)*
+
+> 🎯 Nadia a besoin des fiches de son département, pas de toute l'entreprise.
 
 ```bash
-less /lab/scripts/sql/tp2/02-rls.sql
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/02-rls.sql
-as nadia "SELECT departement, count(*) FROM rh.employes GROUP BY 1"
+cat /lab/scripts/sql/tp2/02-rls.sql                # lisez la règle : chacun voit son département
+sql -f /lab/scripts/sql/tp2/02-rls.sql             # on l'active
+sql-as nadia "SELECT departement, count(*) FROM rh.employes GROUP BY 1"
 ```
 
-✅ **Vérifier :** Nadia ne voit qu'**une** ligne : `Finance | 32`.
+✅ **Vérifier :** Nadia ne voit qu'une ligne : Finance | 32.
 
 ### Étape 5 — Masquer les données pour les analystes
 
-> 🎯 Bruno doit pouvoir compter, comparer, faire des moyennes… sans jamais voir **qui** est qui.
+*Alice → Claire*
 
-![Chaque colonne sensible est supprimée, masquée ou généralisée](images/fig_tp2_masquage.png)
+> 🎯 Bruno doit pouvoir compter, comparer, faire des moyennes… sans jamais savoir qui est qui.
+
+![](images/fig_tp2_masquage.png)
 
 ```bash
-less /lab/scripts/sql/tp2/03-vues-masquees.sql             # repérez HMAC, masquer_email, tranche_age
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/03-vues-masquees.sql
-as claire "SELECT * FROM analytics.v_employes LIMIT 3"     # la DPO regarde le résultat
-as claire "SELECT count(*) AS personnes_uniques FROM (SELECT departement, poste, tranche_age, annee_embauche
-           FROM analytics.v_employes GROUP BY 1,2,3,4 HAVING count(*) = 1) x"
+cat /lab/scripts/sql/tp2/03-vues-masquees.sql      # repérez : hmac, masquer_email, tranche_age
+sql -f /lab/scripts/sql/tp2/03-vues-masquees.sql   # crée la vue masquée analytics.v_employes
+sql-as claire "SELECT * FROM analytics.v_employes LIMIT 3"   # la DPO regarde le résultat
+sql-as claire "SELECT count(*) AS personnes_uniques FROM (SELECT 1 FROM analytics.v_employes GROUP BY departement, poste, tranche_age, annee_embauche HAVING count(*) = 1) x"   # combien restent reconnaissables ?
 ```
 
-✅ **Vérifier :** aucun nom, NIR ou IBAN dans la vue. Notez le nombre de « personnes uniques » (question 3).
+✅ **Vérifier :** Aucun nom, NIR ou IBAN dans la vue. Notez le nombre de « personnes uniques » (question 3).
 
 ### Étape 6 — Faire valider par la DPO avant d'ouvrir
 
-> 🎯 Séparation des tâches : Alice prépare, Claire valide, et **seulement après** la vue est ouverte aux analystes.
+*Alice + Claire → Bruno*
+
+> 🎯 Séparation des tâches : Alice prépare, Claire valide, et seulement après la vue est ouverte aux analystes.
+
+![](images/fig_tp2_cycle_habilitations.png)
 
 ```bash
-/lab/scripts/pg-admin.sh -f /lab/scripts/sql/tp2/04-publication.sql
-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"     # refusé : pas encore validée
-as claire "INSERT INTO gouvernance.validations_dpo (objet, decision, commentaire)
-           VALUES ('analytics.v_employes', 'APPROUVE', 'Pas d''identifiant direct')"
-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"     # accepté
-as bruno  "SELECT departement, tranche_salaire, count(*) FROM analytics.v_employes GROUP BY 1,2 LIMIT 5"
+sql -f /lab/scripts/sql/tp2/04-publication.sql                            # crée la fonction publier_vue
+sql-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"      # refusé : pas encore validée
+sql-as claire "INSERT INTO gouvernance.validations_dpo (objet, decision, commentaire) VALUES ('analytics.v_employes', 'APPROUVE', 'OK DPO')"
+sql-as alice  "SELECT analytics.publier_vue('analytics.v_employes')"      # accepté
+sql-as bruno  "SELECT departement, tranche_salaire, count(*) FROM analytics.v_employes GROUP BY 1,2 LIMIT 5"
 ```
 
-✅ **Vérifier :** la publication est refusée avant la validation, acceptée après, et Bruno lit enfin la vue.
+✅ **Vérifier :** La publication est refusée avant la validation, acceptée après, et Bruno lit enfin la vue.
 
 ### Étape 7 — Les mêmes règles sur le stockage objet (MinIO)
 
-> 🎯 Les fichiers doivent suivre les mêmes règles que la base : Bruno lit la zone `curated` (données masquées), jamais la zone `raw-data` (données brutes).
+*Alice / Bruno*
+
+> 🎯 Les fichiers suivent les mêmes règles que la base : Bruno lit la zone curated (masquée), jamais raw-data (brute).
 
 ```bash
-cat /lab/minio-policies/data-analyst.json                  # une seule règle : lecture de "curated"
-/lab/scripts/setup/tp2-minio.sh && source /root/.minio-alias
-mc ls bruno/raw-data/                                      # refusé
-mc cp /etc/hostname bruno/curated/test.txt                 # refusé : lecture seule
-mc ls alice/raw-data/transactions/ | head -3               # Alice (Data Engineer) : OK
+cat /lab/minio-policies/data-analyst.json         # une seule règle : lire « curated »
+/lab/scripts/setup/tp2-minio.sh                   # crée alice et bruno dans MinIO
+mc ls bruno/raw-data/                             # Bruno : refusé
+mc cp /etc/hostname bruno/curated/test.txt        # Bruno ne peut pas écrire : refusé
+mc ls alice/raw-data/transactions/                # Alice (Data Engineer) : OK
 ```
 
 ✅ **Vérifier :** 2 refus pour Bruno, 1 succès pour Alice.

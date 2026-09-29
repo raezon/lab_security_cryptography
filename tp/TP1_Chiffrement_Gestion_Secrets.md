@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | **Durée** | 3 h 30 |
-| **Modalité** | Binôme (un poste = une stack Docker) |
+| **Modalité** | Binôme, sur le lab commun de la classe |
 | **Rendu** | Compte rendu de 2 pages : une capture par étape ✅ + la fiche GRC du §6.3 |
 | **Outils** | HashiCorp Vault, PostgreSQL, OpenSSL |
 
@@ -37,13 +37,10 @@ Vault est le **coffre-fort** de l'entreprise. Retenez 4 notions :
 | Politique | Qui a le droit de faire quoi dans le coffre | `vault policy read ingest-pipeline` |
 | Journal d'audit | Chaque demande est tracée (qui, quoi, quand) | `vault audit enable file …` |
 
-**Démarrer le lab** (sur votre poste, à la racine du dossier) :
+**Se connecter au lab** : ouvrez l'adresse donnée par le formateur et entrez votre **prénom** et votre **nom**. Le lab est **commun à toute la classe** : votre nom s'affiche à côté des étapes que vous lancez. Dans l'onglet **Terminal**, tapez :
 
 ```bash
-./scripts/generate-env.sh            # crée le fichier .env (mots de passe aléatoires)
-docker compose up -d --build         # ~3 minutes la première fois
-docker compose exec toolbox bash     # vous êtes dans le poste de travail
-/lab/scripts/check-stack.sh          # tout doit être [OK] ; Vault est "scellé"
+/lab/scripts/check-stack.sh          # tout doit être [OK] ; Vault est « scellé » (fermé)
 ```
 
 ## 3. Mission
@@ -58,117 +55,141 @@ Dans le binôme, l'un joue Samira, l'autre Alice. Changez de rôle à l'étape 4
 
 ## 4. Manipulations guidées
 
+**Où taper les commandes ?** Dans l'onglet **Terminal** de la console web (adresse donnée par le formateur ; entrez votre prénom et votre nom). Une commande par ligne, Ctrl+Entrée pour lancer. Remplacez chaque `<valeur>` par ce que la commande précédente a affiché. Le bouton **🔑 Voir les identifiants** donne tous les mots de passe du lab et les liens vers Vault, MinIO et RabbitMQ.
+
 Chaque étape suit la même démarche : **🎯 Pourquoi → ▶ Faire → ✅ Vérifier**. Faites une capture de chaque ✅.
+
+**Aide-mémoire**
+
+| Commande | À quoi elle sert |
+|---|---|
+| `sql "SELECT …"` | une requête SQL en administrateur (le mot de passe est lu dans Vault) |
+| `sql -f fichier.sql` | exécuter un fichier SQL |
+| `sql-as bruno "SELECT …"` | une requête **en tant que** alice, bruno, claire, david, samira ou nadia (à partir du TP2) |
+| `vault status` | état du coffre (`Sealed true` = fermé) |
+| `vault-cles` | les 5 clés d'ouverture et le jeton root de Vault |
+| `cat fichier` | lire un script avant de le lancer |
+| `logs tout` | les journaux d'audit, lisibles (`logs audit`, `logs echecs`, `logs minio`, `logs vault`) |
+| `$POSTGRES_PASSWORD`… | les mots de passe du fichier `.env` sont déjà dans des variables |
 
 ### Étape 1 — Constater le problème
 
-> 🎯 On ne corrige bien que ce qu'on a mesuré : trouvons les secrets exposés.
+*Samira (Data Security Engineer)*
+
+> 🎯 On ne corrige bien que ce qu'on a mesuré : trouvons les mots de passe écrits en clair.
 
 ```bash
-cat /lab/scripts/legacy/ingest_legacy.sh                  # lisez les 20 premières lignes
-grep -nE "PASS|SECRET|KEY" /lab/scripts/legacy/ingest_legacy.sh
-bash /lab/scripts/legacy/ingest_legacy.sh                 # le vieux mot de passe marche encore !
+cat /lab/scripts/legacy/ingest_legacy.sh                   # lisez le vieux script
+grep -n "PASS\|SECRET\|KEY" /lab/scripts/legacy/ingest_legacy.sh   # les mots de passe en clair
+bash /lab/scripts/legacy/ingest_legacy.sh                  # il marche encore !
+head -3 /tmp/export_rh_*.csv                               # le fichier exporté : IBAN lisibles
 ```
 
-✅ **Vérifier :** vous listez 3 secrets (PostgreSQL, MinIO, RabbitMQ) et le fichier `/tmp/export_rh_*.csv` contient des IBAN en clair.
+✅ **Vérifier :** Vous trouvez 3 mots de passe (PostgreSQL, MinIO, RabbitMQ) et le fichier exporté contient des IBAN en clair (FR76…).
 
 ### Étape 2 — Ouvrir le coffre-fort
 
-> 🎯 Vault est fermé. On le découpe en 5 clés (Shamir) et il en faut 3 pour l'ouvrir : personne ne peut l'ouvrir seul.
+*Samira*
+
+> 🎯 Vault démarre fermé. À l'ouverture, il fabrique 5 clés : il en faut 3 pour l'ouvrir. Personne ne peut donc l'ouvrir seul.
 
 ```bash
-vault operator init -key-shares=5 -key-threshold=3 -format=json > /lab/work/vault-init.json
-jq -r '.unseal_keys_b64[]' /lab/work/vault-init.json      # les 5 clés
-vault operator unseal        # collez la clé n°1   (répétez 3 fois, une clé différente à chaque fois)
-vault login "$(jq -r .root_token /lab/work/vault-init.json)"
-vault audit enable file file_path=/vault/logs/audit.log   # on trace tout, dès le début
+vault status                                       # Initialized false, Sealed true : coffre neuf et fermé
+vault operator init -format=json > /lab/work/vault-init.json   # crée 5 clés + 1 jeton administrateur
+vault-cles                                         # affiche les 5 clés et le jeton root
+vault operator unseal <clé 1>                      # 1re clé…
+vault operator unseal <clé 2>                      # 2e clé…
+vault operator unseal <clé 3>                      # 3e clé : le coffre s'ouvre
+vault login <jeton root>                           # on se connecte en administrateur
+vault audit enable file file_path=/vault/logs/audit.log   # Vault note tout ce qu'on lui demande
+vault status                                       # Sealed false
 ```
 
-✅ **Vérifier :** `vault status` affiche `Sealed false`.
+✅ **Vérifier :** vault status affiche Sealed false.
 
 ### Étape 3 — Ranger les mots de passe administrateur
 
-> 🎯 Les comptes « super-admin » ne doivent plus traîner dans des fichiers. On les met sous séquestre dans Vault (compte « bris de glace »).
+*Samira*
 
-Sur votre poste, affichez-les : `grep -E "POSTGRES_PASSWORD|MINIO_ROOT|RABBITMQ_ADMIN" .env`. Puis, dans la toolbox :
+> 🎯 Les mots de passe « super-admin » ne doivent plus traîner dans des fichiers : on les range dans le coffre (compte « bris de glace »).
 
 ```bash
-vault secrets enable -path=kv kv-v2
-for s in postgres minio rabbitmq; do
-  read -rp "$s — utilisateur : " U; read -rsp "$s — mot de passe : " PW; echo
-  vault kv put kv/datacorp/break-glass/$s username="$U" password="$PW"
-done
-/lab/scripts/pg-admin.sh -c "SELECT current_user"          # ce script lit le mot de passe dans Vault
+vault secrets enable -path=kv kv-v2                # ouvre un tiroir « kv » pour ranger des secrets
+vault kv put kv/datacorp/break-glass/postgres username=postgres password=$POSTGRES_PASSWORD
+vault kv put kv/datacorp/break-glass/minio    username=$MINIO_ROOT_USER password=$MINIO_ROOT_PASSWORD
+vault kv put kv/datacorp/break-glass/rabbitmq username=$RABBITMQ_ADMIN_USER password=$RABBITMQ_ADMIN_PASSWORD
+vault kv get kv/datacorp/break-glass/postgres      # on relit le secret rangé
+sql "SELECT current_user"                          # « sql » lit le mot de passe dans Vault
 ```
 
-✅ **Vérifier :** `vault kv get kv/datacorp/break-glass/postgres` renvoie le secret, et `pg-admin.sh` se connecte.
+✅ **Vérifier :** vault kv get renvoie le secret, et sql "SELECT current_user" répond postgres.
 
 ### Étape 4 — Des mots de passe temporaires pour PostgreSQL
 
-> 🎯 Au lieu d'un mot de passe éternel, Vault crée un compte **valable 1 heure** qui peut seulement **insérer** des transactions.
+*Alice (Data Engineer)*
 
-![Avant / après : le pipeline demande un compte temporaire à Vault](images/fig_tp1_secret_dynamique.png)
+> 🎯 Au lieu d'un mot de passe éternel, Vault crée à la demande un compte valable 1 heure, qui peut seulement ajouter des transactions.
 
-```bash
-vault secrets enable database
-read -rsp "VAULT_DB_ADMIN_PASSWORD (voir .env) : " VPW; echo
-vault write database/config/datacorp plugin_name=postgresql-database-plugin \
-  connection_url="postgresql://{{username}}:{{password}}@postgres:5432/datacorp?sslmode=verify-full&sslrootcert=/certs/vault/ca.crt" \
-  allowed_roles="*" username="vault_admin" password="$VPW" password_authentication="scram-sha-256"
-vault write -f database/rotate-root/datacorp               # plus aucun humain ne connaît ce mot de passe
-vault write database/roles/app-ingest db_name=datacorp default_ttl=1h max_ttl=4h \
-  creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}' IN ROLE app_ingest;" \
-  revocation_statements="REVOKE app_ingest FROM \"{{name}}\"; DROP ROLE IF EXISTS \"{{name}}\";"
-vault read database/creds/app-ingest                       # un compte tout neuf : v-root-app-inge-…
-```
-
-Testez le compte : remplacez `<utilisateur>` et `<lease_id>` par les valeurs affichées, puis collez le mot de passe quand psql le demande.
+![](images/fig_tp1_secret_dynamique.png)
 
 ```bash
-psql -U <utilisateur> -c "SELECT count(*) FROM finance.transactions"   # refusé : il ne peut pas lire
-vault lease revoke <lease_id>                                          # on le révoque…
-psql -U <utilisateur> -c "SELECT 1"                                    # …il n'existe plus
+cat /lab/scripts/setup/tp1-db-dynamique.sh        # lisez : ce que le script configure dans Vault
+/lab/scripts/setup/tp1-db-dynamique.sh            # Vault sait maintenant créer des comptes PostgreSQL
+vault read database/creds/app-ingest              # un compte tout neuf : notez username, password, lease_id
+PGPASSWORD=<password> psql -U <username> -c "SELECT count(*) FROM finance.transactions"   # refusé : il ne peut qu'écrire
+vault lease revoke <lease_id>                     # on supprime le compte tout de suite
+PGPASSWORD=<password> psql -U <username> -c "SELECT 1"                                   # échec : il n'existe plus
 ```
 
-✅ **Vérifier :** la lecture est refusée, puis la connexion échoue après la révocation.
+✅ **Vérifier :** La lecture est refusée (permission denied), puis la connexion échoue après la révocation.
 
 ### Étape 5 — Chiffrer les IBAN
 
-> 🎯 Si quelqu'un vole une sauvegarde de la base, il ne doit lire que du charabia. Vault garde la clé : la base ne contient que des données chiffrées.
+*Alice*
+
+> 🎯 Si quelqu'un vole une copie de la base, il ne doit lire que du charabia. La clé reste dans Vault, la base ne garde que le texte chiffré.
+
+![](images/fig_tp1_matrice_risque.png)
 
 ```bash
-vault secrets enable transit
-vault write -f transit/keys/datacorp-pii                   # clé AES-256 qui ne sort jamais de Vault
-vault write transit/encrypt/datacorp-pii plaintext=$(echo -n "FR7630001007941234567890185" | base64)
-vault write -f transit/keys/datacorp-pii/rotate            # nouvelle version de la clé
-cat /lab/scripts/setup/tp1-chiffrer-existant.sh            # lisez-le avant de l'exécuter
-/lab/scripts/setup/tp1-chiffrer-existant.sh                # chiffre les 2 260 IBAN existants
-/lab/scripts/pg-admin.sh -c "SELECT matricule, left(iban, 30) FROM rh.employes LIMIT 3"
+vault secrets enable transit                       # le moteur qui chiffre à la demande
+vault write -f transit/keys/datacorp-pii           # crée une clé AES-256 (elle ne sort jamais de Vault)
+vault write transit/encrypt/datacorp-pii plaintext=$(echo -n "FR7630001007941234567890185" | base64)   # Vault veut du base64
+vault write -f transit/keys/datacorp-pii/rotate    # nouvelle version de la clé (v2)
+/lab/scripts/setup/tp1-chiffrer-existant.sh        # chiffre tous les IBAN déjà en base
+sql "SELECT matricule, left(iban, 30) FROM rh.employes LIMIT 3"
 ```
 
-✅ **Vérifier :** les IBAN commencent maintenant par `vault:v2:`.
+✅ **Vérifier :** Les IBAN commencent maintenant par vault:v2:.
 
 ### Étape 6 — Brancher tout le pipeline et vérifier le chiffrement réseau
 
-> 🎯 On applique la même logique à RabbitMQ et MinIO (script fourni), puis on **prouve** que tout circule en TLS.
+*Alice*
+
+> 🎯 On applique la même idée à RabbitMQ et MinIO (script fourni), puis on vérifie que tout circule chiffré (TLS).
 
 ```bash
-/lab/scripts/setup/tp1-pipeline.sh                         # RabbitMQ, MinIO, AppRole, puis lance le pipeline
-/lab/scripts/pg-admin.sh -c "SELECT ingere_par, count(*) FROM finance.transactions GROUP BY 1"
-/lab/scripts/pg-admin.sh -c "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
-psql "host=postgres dbname=datacorp user=postgres sslmode=disable"      # connexion SANS chiffrement
+/lab/scripts/setup/tp1-pipeline.sh                 # branche RabbitMQ + MinIO sur Vault et lance le pipeline
+sql "SELECT ingere_par, count(*) FROM finance.transactions GROUP BY 1"    # qui a écrit les transactions ?
+sql "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()"   # notre connexion est-elle chiffrée ?
+psql "host=postgres user=postgres sslmode=disable" -c "SELECT 1"          # sans chiffrement : refusé
 ```
 
-✅ **Vérifier :** les transactions du pipeline sont insérées par un compte `v-approle-…`, la session est en `TLSv1.3`, et la connexion non chiffrée est **refusée**.
+✅ **Vérifier :** Les transactions sont écrites par un compte v-approle-…, la connexion est en TLSv1.3, et la connexion sans chiffrement est refusée.
 
 ### Étape 7 — Fermer l'ancien accès
 
+*Samira*
+
+> 🎯 Le vieux compte legacy_etl et son mot de passe connu de tous doivent disparaître.
+
 ```bash
-/lab/scripts/pg-admin.sh -c "ALTER ROLE legacy_etl NOLOGIN PASSWORD NULL"
-bash /lab/scripts/legacy/ingest_legacy.sh ; shred -u /tmp/export_rh_*.csv
+sql "ALTER ROLE legacy_etl NOLOGIN PASSWORD NULL"   # on ferme le vieux compte
+bash /lab/scripts/legacy/ingest_legacy.sh          # le vieux script échoue maintenant
+rm -f /tmp/export_rh_*.csv                         # on détruit l'export en clair
 ```
 
-✅ **Vérifier :** le vieux script échoue.
+✅ **Vérifier :** Le vieux script échoue.
 
 ## 5. Questions de compréhension
 

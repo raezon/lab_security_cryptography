@@ -62,6 +62,10 @@ PostgreSQL n'est volontairement **pas** exposé sur l'hôte : on s'y connecte de
 | Au repos (disques) | lecture brute des fichiers PostgreSQL (IBAN chiffrés, NIR en clair, tuples morts), MinIO (bucket clair vs SSE-S3), Vault (barrière) |
 | Accès aux services | URL et identifiants (lus dans `.env` et Vault, masqués), comptes éphémères Vault |
 | Terminal | commandes libres dans la toolbox |
+| 📚 Cours | le projet DataCorp (voyage animé d'une transaction, menaces, personnages), Vault (jeu Shamir 3/5), MinIO (visionneuse des vrais buckets : S3 vs disque), RabbitMQ (simulation de file) — avec captures d'écran guidées et quiz |
+| Défis | chaque page « chiffrement » propose des défis ludiques cochés automatiquement (stockés dans le navigateur) |
+
+Captures d'écran des cours : `./scripts/captures-cours.sh` (Playwright en conteneur, se connecte aux interfaces avec le jeton root et les comptes admin du `.env`) — écrit `webapp/static/cours/*.png` puis reconstruit la console. Tant qu'elles manquent, la console affiche un emplacement « 📸 Capture à venir ».
 
 Code : `webapp/` (bibliothèque standard Go uniquement). Reconstruire sans recréer la toolbox :
 `docker compose up -d --build --no-deps lab-console`.
@@ -111,6 +115,43 @@ registre des traitements RGPD et classification des colonnes (`gouvernance.*`).
 | `david`  | David Nguyen   | SysAdmin / exploitation |
 | `samira` | Samira Haddad  | Data Security Engineer (SecOps) |
 | `nadia`  | Nadia Benali   | Manager RH (département Finance) |
+
+## Deux modes : Facile et Expert
+
+À l'ouverture de la console (après le prénom + nom), l'étudiant choisit un mode (changeable à tout moment dans la barre de gauche) :
+
+- **🎓 Facile** — chaque étape a un bouton **▶ Exécuter** : la console lance la commande et vérifie le ✅. Pour découvrir et comprendre.
+- **🕵️ Expert (noté)** — l'étudiant **tape lui-même** les commandes dans un terminal par étape, avec documentation et indices. Déroulé :
+  - **Phase 1 — Reconnaissance** : constater ce qu'un attaquant pourrait lire tant que rien n'est protégé (secrets en clair, IBAN sur le disque, trafic en clair…). Non noté.
+  - **Phase 2 — Sécuriser** : refaire chaque mesure en tapant les commandes. **Barème par étape** : tapé sans aide **10 pts**, commande **pré-remplie 4 pts**, **solution 2 pts**. Une page **🏆 Mon score** récapitule le total (barème personnel, stocké dans le navigateur de l'étudiant ; l'endpoint `/api/check/{id}` vérifie la commande tapée avec les mêmes critères que le mode Facile).
+
+## Lab partagé en classe
+
+Une seule stack, publiée derrière Caddy ; chaque étudiant entre son **prénom et son nom** à l'ouverture de la console
+(noté à côté des étapes qu'il lance et dans `docker compose logs lab-console`). Tout le monde a les mêmes accès.
+
+| Interface | Adresse (VM de cours) | Identifiants |
+|---|---|---|
+| Console des TP | https://crypto.158-178-196-145.sslip.io | prénom + nom |
+| Vault UI | https://vault.158-178-196-145.sslip.io | méthode « Token » + jeton root (bouton 🔑) |
+| MinIO Console | https://minio.158-178-196-145.sslip.io | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` (bouton 🔑) |
+| RabbitMQ Management | https://rabbitmq.158-178-196-145.sslip.io | `RABBITMQ_ADMIN_USER` / `RABBITMQ_ADMIN_PASSWORD` (bouton 🔑) |
+
+Réglages dans `.env` : `STUDENT_MODE=1` (corrigés masqués), `VAULT_PUBLIC_URL`, `MINIO_PUBLIC_URL`, `RABBITMQ_PUBLIC_URL`.
+Remettre le lab à zéro entre deux groupes : `docker compose down -v && sudo rm -rf work/* && docker compose up -d`.
+(`scripts/etudiants.sh` reste disponible pour donner un lab isolé à chaque étudiant.)
+
+## Commandes simplifiées de la toolbox
+
+| Commande | Rôle |
+|---|---|
+| `sql "SELECT …"` / `sql -f f.sql` | requête en administrateur (remplace `/lab/scripts/pg-admin.sh -c`) |
+| `sql-as bruno "SELECT …"` | requête en tant qu'une personne du lab (remplace la fonction `as`) |
+| `vault-cles` | clés d'ouverture + jeton root de Vault |
+| `logs audit\|echecs\|minio\|vault\|tout` | journaux d'audit lisibles (remplace les filtres `jq` du TP3) |
+| `effacer-preuve` | tentative de suppression d'une archive WORM (TP3 · étape 2) |
+
+Elles sont dans `scripts/bin/` (dans le `PATH` de la toolbox).
 
 ## Formateur : accélérateur
 

@@ -28,4 +28,4 @@ done
 echo "export MC_HOST_alice=https://alice:$(pw minio alice)@minio:9000"   >  /root/.minio-alias
 echo "export MC_HOST_bruno=https://bruno:$(pw minio bruno)@minio:9000"   >> /root/.minio-alias
 chmod 600 /root/.minio-alias
-echo "[ok] tapez  source /root/.minio-alias  pour agir en tant qu'alice ou bruno"
+echo "[ok] vous pouvez maintenant utiliser  mc ls bruno/...  et  mc ls alice/..."

@@ -36,6 +36,14 @@ var (
 	runMu     sync.Mutex // une seule étape à la fois : elles modifient l'état partagé du lab
 )
 
+var (
+	runnerMu sync.Mutex
+	runner   string
+)
+
+func setRunner(s string)    { runnerMu.Lock(); runner = s; runnerMu.Unlock() }
+func currentRunner() string { runnerMu.Lock(); defer runnerMu.Unlock(); return runner }
+
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -57,7 +65,8 @@ func labEnv() []string {
 // ------------------------------------------------------------------ état des étapes
 
 type StepState struct {
-	Status string    `json:"status"` // ok | ko
+	By     string    `json:"by,omitempty"` // étudiant qui a lancé l'étape
+	Status string    `json:"status"`       // ok | ko
 	Code   int       `json:"code"`
 	At     time.Time `json:"at"`
 	Checks []Check   `json:"checks"`
@@ -117,7 +126,8 @@ func (s *stream) Write(p []byte) (int, error) {
 
 // Restaure la session de la toolbox si le conteneur a été recréé ou Vault redémarré :
 // l'état (~/.vault-token, alias mc) vit dans la couche inscriptible du conteneur.
-const sessionRestore = `if [ -r /lab/work/vault-init.json ] && ! vault token lookup >/dev/null 2>&1; then
+const sessionRestore = `export PATH=/lab/scripts/bin:$PATH
+if [ -r /lab/work/vault-init.json ] && ! vault token lookup >/dev/null 2>&1; then
   [ "$(vault status -format=json 2>/dev/null | jq -r .sealed)" = true ] && /lab/scripts/vault-unseal.sh >/dev/null && echo "[console] Vault descellé (redémarrage détecté)"
   vault login -no-print "$(jq -r .root_token /lab/work/vault-init.json)" && echo "[console] session Vault restaurée (toolbox recréée)"
 fi
@@ -147,10 +157,11 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !runMu.TryLock() {
-		http.Error(w, "une autre étape est en cours d'exécution", 409)
+		http.Error(w, "Une autre étape est en cours (lancée par "+currentRunner()+") : réessayez dans un instant.", 409)
 		return
 	}
-	defer runMu.Unlock()
+	setRunner(who(r) + " · " + st.ID)
+	defer func() { setRunner(""); runMu.Unlock() }()
 	s := newStream(w)
 	s.event(map[string]string{"t": "start", "id": st.ID})
 	code, err := docker.Exec(r.Context(), toolbox, "", labEnv(), []string{"bash", "-c", stepScript(st)}, s)
@@ -158,7 +169,7 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 		s.Write([]byte("\n[console] erreur : " + err.Error() + "\n"))
 	}
 	out := s.buf.String()
-	res := StepState{Code: code, At: time.Now(), Status: "ok"}
+	res := StepState{By: who(r), Code: code, At: time.Now(), Status: "ok"}
 	for _, p := range st.Expect {
 		ok := regexp.MustCompile(p).MatchString(out)
 		res.Checks = append(res.Checks, Check{Pattern: p, OK: ok})
@@ -181,6 +192,7 @@ func handleExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "commande vide", 400)
 		return
 	}
+	log.Printf("[%s] terminal : %s", who(r), truncate(strings.ReplaceAll(req.Cmd, "\n", " ; "), 300))
 	s := newStream(w)
 	script := sessionRestore + req.Cmd
 	code, err := docker.Exec(r.Context(), toolbox, "", labEnv(), []string{"bash", "-c", script}, s)
@@ -189,6 +201,52 @@ func handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 	vaultTokenCache.reset()
 	s.event(map[string]any{"t": "end", "code": code})
+}
+
+// handleCheck (mode expert) : exécute la commande TAPÉE par l'étudiant, puis la
+// vérifie avec les mêmes critères ✅ que l'étape (regex Go, moteur identique).
+func handleCheck(w http.ResponseWriter, r *http.Request) {
+	st := findStep(r.PathValue("id"))
+	if st == nil {
+		http.Error(w, "étape inconnue", 404)
+		return
+	}
+	var req struct{ Cmd string }
+	json.NewDecoder(r.Body).Decode(&req)
+	if strings.TrimSpace(req.Cmd) == "" {
+		http.Error(w, "commande vide", 400)
+		return
+	}
+	if !runMu.TryLock() {
+		http.Error(w, "Une autre étape est en cours (lancée par "+currentRunner()+") : réessayez dans un instant.", 409)
+		return
+	}
+	setRunner(who(r) + " · expert · " + st.ID)
+	defer func() { setRunner(""); runMu.Unlock() }()
+	log.Printf("[%s] expert %s : %s", who(r), st.ID, truncate(strings.ReplaceAll(req.Cmd, "\n", " ; "), 300))
+	s := newStream(w)
+	s.event(map[string]string{"t": "start", "id": st.ID})
+	code, err := docker.Exec(r.Context(), toolbox, "", labEnv(), []string{"bash", "-c", sessionRestore + req.Cmd}, s)
+	if err != nil {
+		s.Write([]byte("\n[console] erreur : " + err.Error() + "\n"))
+	}
+	out := s.buf.String()
+	res := StepState{By: who(r) + " (expert)", Code: code, At: time.Now(), Status: "ok"}
+	for _, p := range st.Expect {
+		ok := regexp.MustCompile(p).MatchString(out)
+		res.Checks = append(res.Checks, Check{Pattern: p, OK: ok})
+		if !ok {
+			res.Status = "ko"
+		}
+	}
+	if res.Status == "ok" { // en expert, on ne « rétrograde » pas une étape déjà validée
+		stateMu.Lock()
+		state[st.ID] = res
+		saveState()
+		stateMu.Unlock()
+	}
+	vaultTokenCache.reset()
+	s.event(map[string]any{"t": "end", "code": code, "status": res.Status, "checks": res.Checks})
 }
 
 // ------------------------------------------------------------------ jeton Vault
@@ -485,7 +543,9 @@ func main() {
 	mux.Handle("GET /", http.FileServerFS(sub))
 	mux.Handle("GET /img/", http.StripPrefix("/img/", http.FileServer(http.Dir(env("IMAGES_DIR", "/lab/tp/images")))))
 
-	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, catalog, nil) })
+	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, publicCatalog(), nil) })
+	mux.HandleFunc("GET /api/info", handleInfo)
+	mux.HandleFunc("GET /api/credentials", handleCredentials)
 	mux.HandleFunc("GET /api/status", handleStatus)
 	mux.HandleFunc("POST /api/reset", func(w http.ResponseWriter, r *http.Request) {
 		stateMu.Lock()
@@ -495,6 +555,7 @@ func main() {
 		writeJSON(w, map[string]bool{"ok": true}, nil)
 	})
 	mux.HandleFunc("POST /api/run/{id}", handleRun)
+	mux.HandleFunc("POST /api/check/{id}", handleCheck)
 	mux.HandleFunc("POST /api/exec", handleExec)
 
 	mux.HandleFunc("GET /api/tls", handleTLS)
@@ -511,6 +572,8 @@ func main() {
 	mux.HandleFunc("POST /api/rest/postgres", handleRestPostgres)
 	mux.HandleFunc("POST /api/rest/minio", handleRestMinio)
 	mux.HandleFunc("GET /api/rest/vault", handleRestVault)
+	mux.HandleFunc("GET /api/minio/buckets", handleBuckets)
+	mux.HandleFunc("GET /api/minio/object", handleObject)
 	mux.HandleFunc("GET /api/access", handleAccess)
 	mux.HandleFunc("POST /api/access/dynamic/{kind}", handleDynamic)
 
@@ -523,7 +586,7 @@ func main() {
 func logRequests(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/status" {
-			log.Printf("%s %s", r.Method, r.URL.Path)
+			log.Printf("[%s] %s %s", who(r), r.Method, r.URL.Path)
 		}
 		h.ServeHTTP(w, r)
 	})

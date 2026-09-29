@@ -2,7 +2,7 @@ package main
 
 // Page « Accès aux services » : URL, comptes et mots de passe du lab, lus à la
 // demande (.env pour les comptes d'amorçage, Vault KV pour les personas).
-// Les valeurs ne sont jamais journalisées ; la console n'écoute que sur 127.0.0.1.
+// Les valeurs ne sont jamais journalisées.
 
 import (
 	"encoding/json"
@@ -78,15 +78,15 @@ func handleAccess(w http.ResponseWriter, r *http.Request) {
 		vaultAcc = append(vaultAcc, Account{Login: "root (méthode Token)", Secret: root, Kind: "jeton", Role: "administrateur",
 			Source: "work/vault-init.json", Warning: "à révoquer en production après l'initialisation (alerte R8 du TP3)"})
 	}
-	res = append(res, ServiceAccess{ID: "vault", Name: "Vault UI / API", URL: "https://localhost:8200", Internal: "https://vault:8200",
+	res = append(res, ServiceAccess{ID: "vault", Name: "Vault UI / API", URL: vaultPublicURL(), Internal: "https://vault:8200",
 		Note:     "UI : méthode « Token » pour root, « Username » pour les personas (userpass). Clés de descellement : work/vault-init.json.",
 		Accounts: append(vaultAcc, users["vault"]...)})
 
-	res = append(res, ServiceAccess{ID: "rabbitmq", Name: "RabbitMQ Management", URL: "https://localhost:15671", Internal: "amqps://rabbitmq:5671/datacorp · https://rabbitmq:15671",
+	res = append(res, ServiceAccess{ID: "rabbitmq", Name: "RabbitMQ Management", URL: rabbitmqPublicURL(), Internal: "amqps://rabbitmq:5671/datacorp · https://rabbitmq:15671",
 		Note:     "AMQPS (5671) n'est pas publié sur l'hôte : les applications passent par la toolbox. Le pipeline n'utilise jamais ce compte : il reçoit un compte éphémère de Vault (bouton ci-dessous).",
 		Accounts: []Account{{Login: env("RABBITMQ_ADMIN_USER"), Secret: env("RABBITMQ_ADMIN_PASSWORD"), Kind: "mot de passe", Role: "administrateur (vhost datacorp)", Source: ".env · Vault kv/datacorp/break-glass/rabbitmq"}}})
 
-	res = append(res, ServiceAccess{ID: "minio", Name: "MinIO Console / S3", URL: "https://localhost:9001", Internal: "API S3 : https://localhost:9000 (hôte) · https://minio:9000",
+	res = append(res, ServiceAccess{ID: "minio", Name: "MinIO Console / S3", URL: minioPublicURL(), Internal: "API S3 : https://minio:9000",
 		Note: "Les personas n'ont que les droits de leur groupe (TP2) : bruno ne voit que « curated ».",
 		Accounts: append(append([]Account{{Login: env("MINIO_ROOT_USER"), Secret: env("MINIO_ROOT_PASSWORD"), Kind: "mot de passe", Role: "root", Source: ".env · Vault kv/datacorp/break-glass/minio"}},
 			users["minio"]...), svc...)})

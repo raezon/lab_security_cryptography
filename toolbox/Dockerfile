@@ -22,6 +22,8 @@ COPY --from=mc    /opt/bitnami/minio-client/bin/mc /usr/local/bin/mc
 COPY toolbox-entrypoint.sh /usr/local/bin/toolbox-entrypoint.sh
 RUN chmod +x /usr/local/bin/toolbox-entrypoint.sh
 
+# Commandes simplifiées des TP (sql, sql-as, vault-cles, logs…) : scripts/bin monté en /lab/scripts
+ENV PATH=/lab/scripts/bin:$PATH
 WORKDIR /lab
 ENTRYPOINT ["/usr/local/bin/toolbox-entrypoint.sh"]
 CMD ["sleep", "infinity"]

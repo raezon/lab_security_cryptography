@@ -28,8 +28,9 @@ services:
   certs-init:
     build: *toolbox-build
     image: datacorp/toolbox:1.0
-    container_name: dc-certs-init
+    container_name: ${STACK:-dc}-certs-init
     entrypoint: ["bash", "/lab/scripts/pki/generate-certs.sh"]
+    network_mode: none                       # aucun réseau nécessaire (n'en crée pas)
     volumes:
       - certs:/certs
       - ./scripts:/lab/scripts:ro
@@ -39,7 +40,7 @@ services:
   postgres:
     build: ./postgres
     image: datacorp/postgres-pgaudit:16
-    container_name: dc-postgres
+    container_name: ${STACK:-dc}-postgres
     hostname: postgres
     command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     environment:
@@ -71,7 +72,7 @@ services:
   # ---------------------------------------------------------------- HashiCorp Vault
   vault:
     image: hashicorp/vault:1.17
-    container_name: dc-vault
+    container_name: ${STACK:-dc}-vault
     hostname: vault
     command: ["server"]
     cap_add: [IPC_LOCK]
@@ -86,7 +87,7 @@ services:
       - vault-logs:/vault/logs
       - certs:/certs:ro
     ports:
-      - "127.0.0.1:8200:8200"                # UI : https://localhost:8200
+      - "127.0.0.1:${VAULT_PORT:-8200}:8200"   # UI : https://localhost:8200
     networks: [net-data, net-broker]
     depends_on:
       certs-init:
@@ -97,7 +98,7 @@ services:
   minio:
     # minio/minio n'est plus publié sur Docker Hub : même build (commit 0d7408f) via bitnamilegacy
     image: bitnamilegacy/minio:2025.4.22
-    container_name: dc-minio
+    container_name: ${STACK:-dc}-minio
     hostname: minio
     user: "0:0"                              # lit /certs/minio (propriétaire root, 750)
     entrypoint: ["/opt/bitnami/minio/bin/minio"]
@@ -111,8 +112,8 @@ services:
       - minio-data:/data
       - certs:/certs:ro
     ports:
-      - "127.0.0.1:9000:9000"                # API S3 (HTTPS)
-      - "127.0.0.1:9001:9001"                # Console : https://localhost:9001
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"         # API S3 (HTTPS)
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"     # Console : https://localhost:9001
     networks: [net-data]
     depends_on:
       certs-init:
@@ -122,7 +123,7 @@ services:
   # ---------------------------------------------------------------- RabbitMQ (broker d'ingestion)
   rabbitmq:
     image: rabbitmq:3.13-management
-    container_name: dc-rabbitmq
+    container_name: ${STACK:-dc}-rabbitmq
     hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:?à définir dans .env}
@@ -133,7 +134,7 @@ services:
       - rabbitmq-data:/var/lib/rabbitmq
       - certs:/certs:ro
     ports:
-      - "127.0.0.1:15671:15671"              # Management : https://localhost:15671
+      - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15671}:15671"   # Management : https://localhost:15671
     networks: [net-broker]
     depends_on:
       certs-init:
@@ -144,7 +145,7 @@ services:
   audit-sink:
     build: *toolbox-build
     image: datacorp/toolbox:1.0
-    container_name: dc-audit-sink
+    container_name: ${STACK:-dc}-audit-sink
     hostname: audit-sink
     entrypoint: ["python3", "-u", "/lab/audit-sink/sink.py"]
     environment:
@@ -160,7 +161,7 @@ services:
   toolbox:
     build: *toolbox-build
     image: datacorp/toolbox:1.0
-    container_name: dc-toolbox
+    container_name: ${STACK:-dc}-toolbox
     hostname: toolbox
     environment:
       PGHOST: postgres
@@ -202,7 +203,7 @@ services:
   lab-console:
     build: ./webapp
     image: datacorp/lab-console:1.0
-    container_name: dc-lab-console
+    container_name: ${STACK:-dc}-lab-console
     hostname: lab-console
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -213,13 +214,24 @@ services:
       RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD}
       AUDIT_TOKEN: ${AUDIT_TOKEN}
       TZ: Europe/Paris
+      COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-datacorp}
+      TOOLBOX_CONTAINER: ${STACK:-dc}-toolbox
+      POSTGRES_CONTAINER: ${STACK:-dc}-postgres
+      MINIO_CONTAINER: ${STACK:-dc}-minio
+      VAULT_CONTAINER: ${STACK:-dc}-vault
+      # Mode étudiant : corrigés masqués. URL publiques des interfaces (sous-domaines Caddy)
+      STUDENT_MODE: ${STUDENT_MODE:-0}
+      STUDENT_NAME: ${STUDENT_NAME:-}
+      VAULT_PUBLIC_URL: ${VAULT_PUBLIC_URL:-https://localhost:8200}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-https://localhost:9001}
+      RABBITMQ_PUBLIC_URL: ${RABBITMQ_PUBLIC_URL:-https://localhost:15671}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - certs:/certs:ro
       - ./tp/images:/lab/tp/images:ro
       - console-data:/data
     ports:
-      - "127.0.0.1:8085:8085"
+      - "127.0.0.1:${CONSOLE_PORT:-8085}:8085"
     networks: [net-data, net-broker]
     depends_on:
       toolbox:
@@ -231,9 +243,9 @@ services:
 # net-broker : zone d'ingestion (RabbitMQ) — RabbitMQ n'a AUCUNE route vers les bases
 networks:
   net-data:
-    name: datacorp-net-data
+    name: ${COMPOSE_PROJECT_NAME:-datacorp}-net-data
   net-broker:
-    name: datacorp-net-broker
+    name: ${COMPOSE_PROJECT_NAME:-datacorp}-net-broker
 
 volumes:
   certs:

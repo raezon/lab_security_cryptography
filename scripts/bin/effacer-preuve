@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  effacer-preuve : essaie de supprimer la 1re archive du coffre WORM (TP3 · étape 2)
+#  On supprime la VERSION de l'objet (pas un simple « delete marker ») :
+#  l'Object Lock (rétention GOVERNANCE 30 j) doit refuser.
+# =============================================================================
+OBJ=$(mc ls --recursive dc/audit-logs | awk '{print $NF}' | grep 'tar.gz$' | head -1)
+[ -n "$OBJ" ] || { echo "Aucune archive dans audit-logs : lancez d'abord /lab/scripts/seal-logs.sh" >&2; exit 1; }
+VID=$(mc ls --versions --json "dc/audit-logs/$OBJ" | jq -r 'select(.isDeleteMarker != true) | .versionId' | head -1)
+echo "Archive visée : audit-logs/$OBJ (version $VID)"
+echo "Tentative de suppression…"
+mc rm --version-id "$VID" "dc/audit-logs/$OBJ"
+echo; echo "Protection en place :"; mc retention info --version-id "$VID" "dc/audit-logs/$OBJ"
