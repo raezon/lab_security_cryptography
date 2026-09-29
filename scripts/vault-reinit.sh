@@ -57,7 +57,7 @@ docker exec "$TB" rm -f /lab/work/vault-init.json /lab/work/.vault-init.bak.json
 docker exec "$TB" sh -c 'rm -rf /lab/work/approle/*'
 
 echo "== 3/4 Mot de passe vault_admin + comptes dynamiques orphelins"
-docker exec -i "$PG" psql -q -U postgres -d datacorp -v pw="$VAULT_DB_ADMIN_PASSWORD" <<'EOF'
+docker exec -i -u postgres "$PG" psql -q -U postgres -d datacorp -v pw="$VAULT_DB_ADMIN_PASSWORD" <<'EOF'
 ALTER ROLE vault_admin PASSWORD :'pw';
 DO $$ DECLARE r text; BEGIN
   FOR r IN SELECT rolname FROM pg_roles WHERE rolname LIKE 'v-%' LOOP
