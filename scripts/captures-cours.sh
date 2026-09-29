@@ -22,6 +22,7 @@ docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e RUSER="$(g RABBITMQ_ADMIN_USER)" -e RPASS="$(g RABBITMQ_ADMIN_PASSWORD)" \
   mcr.microsoft.com/playwright:v1.49.0-jammy \
   bash -c "[ -d node_modules/playwright ] || npm i --silent playwright@1.49.0 >/dev/null 2>&1; node captures-cours.js"
+rm -f "$OUT/sources.json"   # vraies captures du lab : plus de crédit « documentation officielle »
 ls -1 "$OUT"
 docker compose up -d --build --no-deps lab-console
 echo "✓ Captures intégrées : ouvrez la console → 📚 Cours."

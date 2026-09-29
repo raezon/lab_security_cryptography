@@ -107,12 +107,23 @@ function storyBox(icon, title, html) {
 }
 
 // ================================================================ capture d'écran
+// cours/sources.json (facultatif) crédite les captures reprises de la documentation
+// officielle ; scripts/captures-cours.sh le supprime quand il prend les vraies captures.
+let SHOTSRC = {};
+const shotSrcHTML = (file) => {
+  const s = SHOTSRC[file];
+  return s && s[0] ? `Capture illustrative : <a href="${esc(s[1])}" target="_blank" rel="noopener">${esc(s[0])} ↗</a> — ton écran peut différer un peu (version, noms).` : "";
+};
+fetch("/cours/sources.json").then((r) => (r.ok ? r.json() : {})).then((j) => {
+  SHOTSRC = j || {};
+  $$(".shot-src[data-file]").forEach((el) => (el.innerHTML = shotSrcHTML(el.dataset.file)));
+}).catch(() => {});
 function shot(file, title, steps = []) {
   return `<figure class="shot">
     <div class="shot-img"><img src="/cours/${file}" alt="${esc(title)}" loading="lazy" onerror="this.closest('.shot').classList.add('missing')">
       <div class="shot-missing">📸 <b>Capture à venir</b><br><span class="small">${esc(title)}</span></div>
       <span class="shot-zoom">🔍 cliquer pour agrandir</span></div>
-    <figcaption><b>${esc(title)}</b>${steps.length ? `<ol>${steps.map((s) => `<li>${s}</li>`).join("")}</ol>` : ""}</figcaption>
+    <figcaption><b>${esc(title)}</b>${steps.length ? `<ol>${steps.map((s) => `<li>${s}</li>`).join("")}</ol>` : ""}<small class="shot-src muted" data-file="${esc(file)}">${shotSrcHTML(file)}</small></figcaption>
   </figure>`;
 }
 

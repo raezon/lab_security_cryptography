@@ -1,0 +1,22 @@
+{
+  "vault-1-connexion.png": ["HashiCorp — documentation Vault", "https://developer.hashicorp.com/vault/docs"],
+  "vault-2-moteurs.png": ["HashiCorp — tutoriel Vault", "https://developer.hashicorp.com/vault/tutorials/get-started/learn-ui"],
+  "vault-3-cle-transit.png": ["HashiCorp — documentation Vault", "https://developer.hashicorp.com/vault/docs/secrets/transit"],
+  "vault-4-versions.png": ["HashiCorp — tutoriel Vault", "https://developer.hashicorp.com/vault/tutorials/encryption-as-a-service/eaas-transit"],
+  "vault-5-chiffrer.png": ["HashiCorp — documentation Vault", "https://developer.hashicorp.com/vault/docs/secrets/transit"],
+  "vault-6-kv.png": ["HashiCorp — documentation Vault", "https://developer.hashicorp.com/vault/docs/secrets/kv/kv-v2"],
+  "vault-7-politiques.png": ["HashiCorp — documentation Vault", "https://developer.hashicorp.com/vault/docs/concepts/policies"],
+  "minio-1-connexion.png": ["MinIO — documentation", "https://github.com/minio/docs"],
+  "minio-2-buckets.png": ["MinIO — documentation", "https://github.com/minio/docs"],
+  "minio-3-objets.png": ["MinIO — documentation", "https://github.com/minio/docs"],
+  "minio-4-objet-detail.png": ["MinIO — documentation", "https://github.com/minio/docs"],
+  "minio-5-bucket-reglages.png": ["MinIO — documentation", "https://github.com/minio/docs"],
+  "minio-6-politiques.png": ["MinIO — documentation", "https://github.com/minio/docs"],
+  "rabbitmq-1-connexion.png": ["RabbitMQ — documentation", "https://www.rabbitmq.com/docs/management"],
+  "rabbitmq-2-apercu.png": ["CloudAMQP — guide RabbitMQ", "https://www.cloudamqp.com/blog/part3-rabbitmq-for-beginners_the-management-interface.html"],
+  "rabbitmq-3-connexions.png": ["RabbitMQ — documentation", "https://www.rabbitmq.com/docs/channels"],
+  "rabbitmq-4-files.png": ["CloudAMQP — guide RabbitMQ", "https://www.cloudamqp.com/blog/part3-rabbitmq-for-beginners_the-management-interface.html"],
+  "rabbitmq-5-message.png": ["CloudAMQP — guide RabbitMQ", "https://www.cloudamqp.com/blog/part3-rabbitmq-for-beginners_the-management-interface.html"],
+  "rabbitmq-6-utilisateurs.png": ["CloudAMQP — guide RabbitMQ", "https://www.cloudamqp.com/blog/part3-rabbitmq-for-beginners_the-management-interface.html"],
+  "_": ["", ""]
+}

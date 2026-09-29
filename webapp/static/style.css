@@ -245,7 +245,9 @@ textarea.cmd:focus { outline: 2px solid var(--accent); outline-offset: 0; }
 .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
 .shot { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
 .shot-img { position: relative; background: var(--panel2); cursor: zoom-in; aspect-ratio: 1366 / 820; }
-.shot-img img { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+.shot-img img { width: 100%; height: 100%; object-fit: contain; object-position: center; background: #fff; display: block; }
+.shot-src { display: block; margin-top: 8px; font-size: 11.5px; line-height: 1.4; }
+.shot-src:empty { display: none; }
 .shot-zoom { position: absolute; right: 8px; bottom: 8px; font-size: 11.5px; background: #000a; color: #fff; padding: 2px 8px; border-radius: 99px; opacity: 0; transition: opacity .2s; }
 .shot-img:hover .shot-zoom { opacity: 1; }
 .shot-missing { display: none; position: absolute; inset: 0; place-content: center; text-align: center; color: var(--muted); padding: 16px; border: 2px dashed var(--line2); margin: 10px; border-radius: 8px; }
