@@ -8,6 +8,8 @@
 # =============================================================================
 REAL=/usr/local/bin/vault
 BAK=/lab/work/.vault-init.bak.json
+# coffre personnel (onglet « Mon coffre ») : aucune protection, c'est un bac à sable
+case "${VAULT_ADDR:-https://vault:8200}" in https://vault:8200|https://vault:8200/) ;; *) exec "$REAL" "$@";; esac
 if [ "$1" = operator ] && [ "$2" = init ]; then
   shift 2
   for a in "$@"; do case "$a" in -h|-help|--help|-status) exec "$REAL" operator init "$@";; esac; done

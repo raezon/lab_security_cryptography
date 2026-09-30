@@ -21,14 +21,17 @@ import (
 	"time"
 )
 
-type Docker struct{ hc *http.Client }
+type Docker struct {
+	hc   *http.Client
+	sock string
+}
 
 func NewDocker(sock string) *Docker {
 	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		var d net.Dialer
 		return d.DialContext(ctx, "unix", sock)
 	}}
-	return &Docker{hc: &http.Client{Transport: tr}}
+	return &Docker{hc: &http.Client{Transport: tr}, sock: sock}
 }
 
 func (d *Docker) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
