@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,6 +128,7 @@ func (s *stream) Write(p []byte) (int, error) {
 // Restaure la session de la toolbox si le conteneur a été recréé ou Vault redémarré :
 // l'état (~/.vault-token, alias mc) vit dans la couche inscriptible du conteneur.
 const sessionRestore = `export PATH=/lab/scripts/bin:$PATH
+mkdir -p "$HOME" 2>/dev/null
 # vault-init.json vidé par un « vault operator init > … » relancé : on remet la sauvegarde
 if ! jq -e .root_token /lab/work/vault-init.json >/dev/null 2>&1 && jq -e .root_token /lab/work/.vault-init.bak.json >/dev/null 2>&1; then
   cp /lab/work/.vault-init.bak.json /lab/work/vault-init.json && chmod 600 /lab/work/vault-init.json && echo "[console] work/vault-init.json restauré depuis la sauvegarde"
@@ -160,15 +162,17 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "étape inconnue", 404)
 		return
 	}
-	if !runMu.TryLock() {
-		http.Error(w, "Une autre étape est en cours (lancée par "+currentRunner()+") : réessayez dans un instant.", 409)
+	stu := me(r)
+	release, msg := acquire(stu)
+	if release == nil {
+		http.Error(w, msg, 409)
 		return
 	}
-	setRunner(who(r) + " · " + st.ID)
-	defer func() { setRunner(""); runMu.Unlock() }()
+	defer release()
+	prepareStep(r.Context(), stu, st.ID)
 	s := newStream(w)
 	s.event(map[string]string{"t": "start", "id": st.ID})
-	code, err := docker.Exec(r.Context(), toolbox, "", labEnv(), []string{"bash", "-c", stepScript(st)}, s)
+	code, err := docker.Exec(r.Context(), toolbox, "", studentEnv(stu), []string{"bash", "-c", stepScript(st)}, s)
 	if err != nil {
 		s.Write([]byte("\n[console] erreur : " + err.Error() + "\n"))
 	}
@@ -181,10 +185,8 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 			res.Status = "ko"
 		}
 	}
-	stateMu.Lock()
-	state[st.ID] = res
-	saveState()
-	stateMu.Unlock()
+	termLog(stu, st.ID, "[▶ Exécuter l'étape "+strconv.Itoa(st.Num)+"]", out, code)
+	setStep(stu, st.ID, res)
 	vaultTokenCache.reset() // l'étape a pu (ré)ouvrir une session Vault
 	s.event(map[string]any{"t": "end", "code": code, "status": res.Status, "checks": res.Checks})
 }
@@ -197,12 +199,14 @@ func handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[%s] terminal : %s", who(r), truncate(strings.ReplaceAll(req.Cmd, "\n", " ; "), 300))
+	stu := me(r)
 	s := newStream(w)
 	script := sessionRestore + req.Cmd
-	code, err := docker.Exec(r.Context(), toolbox, "", labEnv(), []string{"bash", "-c", script}, s)
+	code, err := docker.Exec(r.Context(), toolbox, "", studentEnv(stu), []string{"bash", "-c", script}, s)
 	if err != nil {
 		s.Write([]byte("\n[console] erreur : " + err.Error() + "\n"))
 	}
+	termLog(stu, r.URL.Query().Get("step"), req.Cmd, s.buf.String(), code)
 	vaultTokenCache.reset()
 	s.event(map[string]any{"t": "end", "code": code})
 }
@@ -221,20 +225,27 @@ func handleCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "commande vide", 400)
 		return
 	}
-	if !runMu.TryLock() {
-		http.Error(w, "Une autre étape est en cours (lancée par "+currentRunner()+") : réessayez dans un instant.", 409)
+	stu := me(r)
+	release, msg := acquire(stu)
+	if release == nil {
+		http.Error(w, msg, 409)
 		return
 	}
-	setRunner(who(r) + " · expert · " + st.ID)
-	defer func() { setRunner(""); runMu.Unlock() }()
+	defer release()
+	prepareStep(r.Context(), stu, st.ID)
+	if q := r.URL.Query().Get("task"); q != "" {
+		checkTask(w, r, st, q, req.Cmd)
+		return
+	}
 	log.Printf("[%s] expert %s : %s", who(r), st.ID, truncate(strings.ReplaceAll(req.Cmd, "\n", " ; "), 300))
 	s := newStream(w)
 	s.event(map[string]string{"t": "start", "id": st.ID})
-	code, err := docker.Exec(r.Context(), toolbox, "", labEnv(), []string{"bash", "-c", sessionRestore + req.Cmd}, s)
+	code, err := docker.Exec(r.Context(), toolbox, "", studentEnv(stu), []string{"bash", "-c", sessionRestore + req.Cmd}, s)
 	if err != nil {
 		s.Write([]byte("\n[console] erreur : " + err.Error() + "\n"))
 	}
 	out := s.buf.String()
+	termLog(stu, st.ID, req.Cmd, out, code)
 	res := StepState{By: who(r) + " (expert)", Code: code, At: time.Now(), Status: "ok"}
 	for _, p := range st.Expect {
 		ok := regexp.MustCompile(p).MatchString(out)
@@ -244,13 +255,42 @@ func handleCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if res.Status == "ok" { // en expert, on ne « rétrograde » pas une étape déjà validée
-		stateMu.Lock()
-		state[st.ID] = res
-		saveState()
-		stateMu.Unlock()
+		setStep(stu, st.ID, res)
 	}
 	vaultTokenCache.reset()
 	s.event(map[string]any{"t": "end", "code": code, "status": res.Status, "checks": res.Checks})
+}
+
+// Mode expert pas à pas : vérifie UNE sous-commande (tasks.go). La dernière
+// sous-commande réussie valide l'étape pour toute la classe.
+func checkTask(w http.ResponseWriter, r *http.Request, st *Step, q, cmd string) {
+	n, err := strconv.Atoi(q)
+	if err != nil || n < 0 || n >= len(st.Tasks) {
+		http.Error(w, "sous-commande inconnue", 404)
+		return
+	}
+	t := st.Tasks[n]
+	log.Printf("[%s] expert %s.%d : %s", who(r), st.ID, n+1, truncate(strings.ReplaceAll(cmd, "\n", " ; "), 300))
+	stu := me(r)
+	s := newStream(w)
+	s.event(map[string]string{"t": "start", "id": st.ID})
+	code, err := docker.Exec(r.Context(), toolbox, "", studentEnv(stu), []string{"bash", "-c", sessionRestore + "[ -r /root/.minio-alias ] && source /root/.minio-alias\n" + cmd}, s)
+	if err != nil {
+		s.Write([]byte("\n[console] erreur : " + err.Error() + "\n"))
+	}
+	out := s.buf.String()
+	termLog(stu, st.ID, cmd, out, code)
+	ok := err == nil && taskOK(t, cmd, out, code) // toute commande qui atteint l'objectif est acceptée
+	status := "ko"
+	if ok {
+		status = "ok"
+	}
+	if ok && n == len(st.Tasks)-1 {
+		setStep(stu, st.ID, StepState{By: who(r) + " (expert)", Code: code, At: time.Now(), Status: "ok", Checks: []Check{{Pattern: "toutes les commandes réussies", OK: true}}})
+	}
+	vaultTokenCache.reset()
+	s.event(map[string]any{"t": "end", "code": code, "status": status, "task": n, "last": n == len(st.Tasks)-1,
+		"checks": []Check{{Pattern: "résultat attendu", OK: ok}}})
 }
 
 // ------------------------------------------------------------------ jeton Vault
@@ -302,12 +342,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	if verr != nil {
 		seal = map[string]any{"error": verr.Error()}
 	}
-	stateMu.Lock()
-	st := map[string]StepState{}
-	for k, v := range state {
-		st[k] = v
-	}
-	stateMu.Unlock()
+	st := stepsOf(me(r)) // chacun ne voit que SA progression
 	writeJSON(w, map[string]any{"containers": cs, "vault": seal, "steps": st}, err)
 }
 
@@ -528,6 +563,39 @@ func handleRestVault(w http.ResponseWriter, r *http.Request) {
 		"secretFound": leak, "secretLabel": "mot de passe superutilisateur PostgreSQL (rangé en TP1 · étape 3)"}, nil)
 }
 
+// Exécutions « Exécuter / Valider » : une à la fois par étudiant, 8 au plus pour la classe.
+var (
+	userLocks sync.Map
+	execSem   = make(chan struct{}, 8)
+)
+
+func acquire(s *Student) (func(), string) {
+	key := "anonyme"
+	if s != nil {
+		key = s.ID
+	}
+	mu, _ := userLocks.LoadOrStore(key, &sync.Mutex{})
+	if !mu.(*sync.Mutex).TryLock() {
+		return nil, "Vous avez déjà une commande en cours : attendez qu'elle se termine."
+	}
+	select {
+	case execSem <- struct{}{}:
+	case <-time.After(20 * time.Second):
+		mu.(*sync.Mutex).Unlock()
+		return nil, "Le lab est très sollicité (beaucoup d'étapes lancées en même temps) : réessayez dans un instant."
+	}
+	return func() { <-execSem; mu.(*sync.Mutex).Unlock() }, ""
+}
+
+// prepareStep : le TP1 · étape 1 a besoin du compte legacy personnel de l'étudiant.
+func prepareStep(ctx context.Context, s *Student, id string) {
+	if s != nil && id == legacyStep {
+		if err := ensureLegacy(ctx, s, false); err != nil {
+			log.Printf("[%s] compte legacy : %v", s.Name(), err)
+		}
+	}
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -540,7 +608,10 @@ func truncate(s string, n int) string {
 func main() {
 	docker = NewDocker(env("DOCKER_SOCK", "/var/run/docker.sock"))
 	vault = NewVault(vaultTokenCache.get)
-	loadState()
+	loadStudents()
+	loadFeedback()
+	go coffreReaper()
+	go digestLoop()
 
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(staticFS, "static")
@@ -552,15 +623,30 @@ func main() {
 	mux.HandleFunc("GET /api/credentials", handleCredentials)
 	mux.HandleFunc("GET /api/status", handleStatus)
 	mux.HandleFunc("POST /api/reset", func(w http.ResponseWriter, r *http.Request) {
-		stateMu.Lock()
-		state = map[string]StepState{}
-		saveState()
-		stateMu.Unlock()
+		resetSteps(me(r))
 		writeJSON(w, map[string]bool{"ok": true}, nil)
 	})
 	mux.HandleFunc("POST /api/run/{id}", handleRun)
 	mux.HandleFunc("POST /api/check/{id}", handleCheck)
 	mux.HandleFunc("POST /api/exec", handleExec)
+
+	mux.HandleFunc("POST /api/register", handleRegister)
+	mux.HandleFunc("GET /api/me", handleMe)
+	mux.HandleFunc("POST /api/score", handleScore)
+	mux.HandleFunc("GET /api/dashboard", handleDashboard)
+	mux.HandleFunc("POST /api/admin/login", handleAdminLogin)
+	mux.HandleFunc("POST /api/admin/logout", handleAdminLogout)
+	mux.HandleFunc("POST /api/admin/mail", handleMailConf)
+	mux.HandleFunc("POST /api/admin/mail/test", handleMailTest)
+	mux.HandleFunc("GET /api/admin/digest", handleDigestPreview)
+	mux.HandleFunc("GET /api/feedback", handleFeedback)
+	mux.HandleFunc("POST /api/feedback", handleFeedback)
+	mux.HandleFunc("GET /api/term", handleTerm)
+	mux.HandleFunc("GET /api/termlog", handleTermLog)
+	mux.HandleFunc("GET /api/coffre", handleCoffre)
+	mux.HandleFunc("POST /api/coffre/{op}", handleCoffre)
+	mux.HandleFunc("GET /api/legacy", handleLegacy)
+	mux.HandleFunc("POST /api/legacy", handleLegacy)
 
 	mux.HandleFunc("GET /api/tls", handleTLS)
 	mux.HandleFunc("GET /api/plaintext", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, plaintextTests(), nil) })

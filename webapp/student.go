@@ -90,6 +90,9 @@ func rabbitmqPublicURL() string { return env("RABBITMQ_PUBLIC_URL", "https://loc
 
 // who : nom de l'étudiant (en-tête X-Etudiant posé par la console), pour les journaux.
 func who(r *http.Request) string {
+	if s := me(r); s != nil {
+		return s.Name()
+	}
 	n, err := url.QueryUnescape(r.Header.Get("X-Etudiant"))
 	if err != nil {
 		return "?"

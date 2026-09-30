@@ -4,78 +4,118 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DataCorp Secure Lab</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230f766e'/><path d='M10 14v-3a6 6 0 0 1 12 0v3' stroke='white' stroke-width='2.6' fill='none'/><rect x='8' y='14' width='16' height='12' rx='2.5' fill='white'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='4' fill='%231c4e80'/><path d='M10 14v-3a6 6 0 0 1 12 0v3' stroke='white' stroke-width='2.6' fill='none'/><rect x='8' y='14' width='16' height='12' rx='1.5' fill='white'/></svg>">
 <script>try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="bulma.min.css">
+<link rel="stylesheet" href="vendor/xterm.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<header class="topbar">
+  <button class="navtoggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false"><span></span><span></span><span></span></button>
+  <a class="brand" href="#/">
+    <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="4" fill="currentColor"/><path d="M10 14v-3a6 6 0 0 1 12 0v3" stroke="var(--paper)" stroke-width="2.6" fill="none"/><rect x="8" y="14" width="16" height="12" rx="1.5" fill="var(--paper)"/></svg>
+    <span><b>DataCorp</b> Secure Lab</span>
+  </a>
+  <div id="vaultBadge" class="vbadge">Vault …</div>
+  <span class="spacer"></span>
+  <div class="who" id="whoami"></div>
+  <button class="button is-small is-primary" id="credsBtn" type="button">🔑 Identifiants</button>
+</header>
 <div class="app">
-  <aside class="side">
-    <div class="brand">
-      <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#0f766e"/><path d="M10 14v-3a6 6 0 0 1 12 0v3" stroke="#fff" stroke-width="2.6" fill="none"/><rect x="8" y="14" width="16" height="12" rx="2.5" fill="#fff"/></svg>
-      <div><b>DataCorp Secure</b><small id="whoami">Lab · chaîne de valeur Data</small></div>
-    </div>
-    <nav id="nav">
-      <a href="#/" data-view="home">Tableau de bord</a>
-      <div class="navlabel">📚 Cours</div>
-      <a href="#/cours/projet" data-view="cours-projet">🏢 Le projet DataCorp</a>
-      <a href="#/cours/vault" data-view="cours-vault">🏦 Vault</a>
-      <a href="#/cours/minio" data-view="cours-minio">🪣 MinIO</a>
-      <a href="#/cours/rabbitmq" data-view="cours-rabbitmq">📮 RabbitMQ</a>
-      <div class="navlabel">Travaux pratiques</div>
-      <a href="#/tp/tp1" data-view="tp1"><span class="tpnum">1</span>Secrets &amp; chiffrement<em id="prog-tp1"></em></a>
-      <a href="#/tp/tp2" data-view="tp2"><span class="tpnum">2</span>RBAC &amp; anonymisation<em id="prog-tp2"></em></a>
-      <a href="#/tp/tp3" data-view="tp3"><span class="tpnum">3</span>Audit &amp; conformité<em id="prog-tp3"></em></a>
-      <div class="navlabel">Chiffrement en direct</div>
-      <a href="#/crypto/transit" data-view="transit"><span class="dot t"></span>En transit (TLS)</a>
-      <a href="#/crypto/app" data-view="app"><span class="dot a"></span>Applicatif (Vault transit)</a>
-      <a href="#/crypto/rest" data-view="rest"><span class="dot r"></span>Au repos (disques)</a>
-      <div class="navlabel">Outils</div>
-      <a href="#/access" data-view="access">🔑 Accès aux services</a>
-      <a href="#/terminal" data-view="terminal">Terminal toolbox</a>
-      <a href="#/score" data-view="score" id="navScore" hidden>🏆 Mon score</a>
+  <aside class="side" id="side">
+    <nav class="menu" id="nav">
+      <ul class="menu-list">
+        <li><a href="#/" data-view="home">🏠 Accueil</a></li>
+        <li><a href="#/sommaire" data-view="sommaire">🧭 Sommaire</a></li>
+      </ul>
+      <p class="menu-label">🧪 Travaux pratiques</p>
+      <ul class="menu-list">
+        <li><a href="#/tp/tp1" data-view="tp1"><span class="tpnum">1</span><span>Secrets et chiffrement</span><em id="prog-tp1"></em></a></li>
+        <li><a href="#/tp/tp2" data-view="tp2"><span class="tpnum">2</span><span>Droits et anonymisation</span><em id="prog-tp2"></em></a></li>
+        <li><a href="#/tp/tp3" data-view="tp3"><span class="tpnum">3</span><span>Audit et preuves</span><em id="prog-tp3"></em></a></li>
+      </ul>
+      <p class="menu-label">📚 Cours</p>
+      <ul class="menu-list">
+        <li><a href="#/cours/projet" data-view="cours-projet">🏢 Le projet DataCorp</a></li>
+        <li><a href="#/cours/vault" data-view="cours-vault">🏦 Vault</a></li>
+        <li><a href="#/cours/minio" data-view="cours-minio">🪣 MinIO</a></li>
+        <li><a href="#/cours/rabbitmq" data-view="cours-rabbitmq">📮 RabbitMQ</a></li>
+      </ul>
+      <p class="menu-label">🔐 Voir le chiffrement</p>
+      <ul class="menu-list">
+        <li><a href="#/crypto/transit" data-view="transit"><span class="dot t"></span>Sur le réseau</a></li>
+        <li><a href="#/crypto/app" data-view="app"><span class="dot a"></span>Dans l'application</a></li>
+        <li><a href="#/crypto/rest" data-view="rest"><span class="dot r"></span>Sur le disque</a></li>
+      </ul>
+      <p class="menu-label">🧰 Outils</p>
+      <ul class="menu-list">
+        <li><a href="#/terminal" data-view="terminal">💻 Terminal</a></li>
+        <li><a href="#/coffre" data-view="coffre">🔐 Sceller / desceller Vault</a></li>
+        <li><a href="#/access" data-view="access">🔑 Comptes et accès</a></li>
+        <li><a href="#/score" data-view="score" id="navScore" hidden>🏆 Mon score</a></li>
+      </ul>
+      <p class="menu-label">📊 Classement et avis</p>
+      <ul class="menu-list">
+        <li><a href="#/classement" data-view="classement">🏆 Classement</a></li>
+        <li><a href="#/feedback" data-view="feedback">💬 Feedback</a></li>
+        <li><a href="#/formateur" data-view="formateur">🧑‍🏫 Formateur</a></li>
+      </ul>
     </nav>
     <div class="sidefoot">
-      <button class="btn primary" id="credsBtn" type="button">🔑 Voir les identifiants</button>
-      <div id="vaultBadge" class="vbadge">Vault : …</div>
       <div class="theme" role="group" aria-label="Thème">
         <button type="button" data-theme-set="auto" title="Suit le réglage de l'ordinateur">🌓 Auto</button>
         <button type="button" data-theme-set="light">☀️ Clair</button>
         <button type="button" data-theme-set="dark">🌙 Sombre</button>
       </div>
-      <label class="toggle" id="trainerToggle"><input type="checkbox" id="trainer"> Mode formateur (corrigés)</label>
     </div>
   </aside>
   <main id="view"></main>
 </div>
-<dialog id="ident" class="modal" style="width:min(440px, calc(100vw - 32px))">
+
+<dialog id="ident" class="dlg" style="width:min(420px, calc(100vw - 32px))">
   <form id="identForm">
-    <h2 style="margin:0 0 6px">Bienvenue sur le lab DataCorp</h2>
-    <p class="muted small" style="margin:0 0 14px">Le lab est commun à toute la classe. Indiquez qui vous êtes : votre nom apparaît à côté des étapes que vous lancez.</p>
-    <label class="field">Prénom<input id="idPrenom" autocomplete="given-name" maxlength="30" required></label>
-    <label class="field">Nom<input id="idNom" autocomplete="family-name" maxlength="30" required></label>
-    <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" type="submit">Entrer dans le lab</button></div>
+    <h2 class="dlg-title">Bienvenue</h2>
+    <p class="muted small">Les services du lab sont partagés, mais votre progression, votre terminal, vos fichiers et votre coffre Vault d'entraînement sont à vous seul(e).</p>
+    <div class="field"><label class="label" for="idPrenom">Prénom</label>
+      <div class="control"><input class="input" id="idPrenom" autocomplete="given-name" maxlength="30" required></div></div>
+    <div class="field"><label class="label" for="idNom">Nom</label>
+      <div class="control"><input class="input" id="idNom" autocomplete="family-name" maxlength="30" required></div></div>
+    <div class="field"><label class="label" for="idEcole">École</label>
+      <div class="control"><input class="input" id="idEcole" autocomplete="organization" maxlength="60" required placeholder="ex. ESGI, EPITA, IUT de Lyon…"></div>
+      <p class="help">Le classement est affiché par école.</p></div>
+    <p class="help is-danger" id="identErr"></p>
+    <div class="buttons is-right"><button class="button is-primary" type="submit">Entrer dans le lab</button></div>
   </form>
 </dialog>
-<dialog id="mode" class="modal" style="width:min(720px, calc(100vw - 32px))">
-  <h2 style="margin:0 0 6px">Choisissez votre mode</h2>
-  <p class="muted small" style="margin:0 0 16px">Le même lab, deux façons de le faire. Vous pourrez changer à tout moment (barre de gauche).</p>
-  <div class="grid g2">
+
+<dialog id="mode" class="dlg" style="width:min(680px, calc(100vw - 32px))">
+  <h2 class="dlg-title">Comment voulez-vous travailler ?</h2>
+  <p class="muted small">Vous pourrez changer à tout moment (en haut à droite).</p>
+  <div class="lgrid g2">
     <button class="modecard" type="button" data-mode-set="facile">
-      <div class="modeicon">🎓</div><h3>Mode Facile</h3>
-      <p class="muted small">Chaque étape a un bouton <b>▶ Exécuter</b> : la console lance les commandes pour vous et vérifie le résultat. Idéal pour découvrir et comprendre.</p>
+      <div class="modeicon">🎓</div><span class="modekicker">Guidé</span><h3>Mode facile</h3>
+      <p class="small">Les commandes sont écrites. Vous lisez, vous copiez dans le terminal ou vous cliquez sur <b>Exécuter</b>. Des indices vous aident à comprendre.</p>
     </button>
     <button class="modecard" type="button" data-mode-set="expert">
-      <div class="modeicon">🕵️</div><h3>Mode Expert <span class="chip crypto" style="vertical-align:middle">noté</span></h3>
-      <p class="muted small">Vous <b>tapez vous-même</b> les commandes dans le terminal, avec documentation et indices. D'abord vous constatez l'exposition des données (reconnaissance), puis vous sécurisez tout. <b>Barème à la clé</b> : plus vous tapez sans aide, plus vous marquez de points.</p>
+      <div class="modeicon">🕵️</div><span class="modekicker">Noté</span><h3>Mode expert</h3>
+      <p class="small">Vous écrivez vous-même les commandes. Indices et solution disponibles, mais ils coûtent des points.</p>
     </button>
   </div>
 </dialog>
-<dialog id="creds" class="modal">
-  <div class="row"><h2 style="margin:0">🔑 Identifiants du lab</h2><span class="spacer"></span><button class="btn sm" id="credsClose" type="button">Fermer ✕</button></div>
+
+<dialog id="creds" class="dlg">
+  <div class="row"><h2 class="dlg-title" style="margin:0">🔑 Identifiants du lab</h2><span class="spacer"></span><button class="delete is-medium" id="credsClose" type="button" aria-label="Fermer"></button></div>
   <div id="credsOut"><p class="muted">Lecture…</p></div>
 </dialog>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
 <script src="app.js"></script>
+<script src="term.js"></script>
 <script src="cours.js"></script>
+<script src="guide.js"></script>
 </body>
 </html>
