@@ -25,6 +25,9 @@ type Step struct {
 	Crypto string   `json:"crypto,omitempty"` // type de protection illustré (repos, transit, applicatif…)
 	Run    []string `json:"run"`
 	Expect []string `json:"expect"`
+	Hints  []string `json:"hints,omitempty"` // indices progressifs (hints.go)
+	Tasks  []Task   `json:"tasks,omitempty"` // mode expert pas à pas (tasks.go)
+	Gui    *Gui     `json:"gui,omitempty"`   // alternative à la souris (gui.go)
 }
 
 type TP struct {
@@ -63,18 +66,18 @@ var catalog = []TP{
 				ID: "tp1-1", Num: 1, Title: "Constater le problème", Role: "Samira (Data Security Engineer)",
 				Why:    "On ne corrige bien que ce qu'on a mesuré : trouvons les mots de passe écrits en clair.",
 				Crypto: "Aucune protection : secrets en clair dans un script, export IBAN en clair",
-				Doc: `cat /lab/scripts/legacy/ingest_legacy.sh                   # lisez le vieux script
-grep -n "PASS\|SECRET\|KEY" /lab/scripts/legacy/ingest_legacy.sh   # les mots de passe en clair
-bash /lab/scripts/legacy/ingest_legacy.sh                  # il marche encore !
-head -3 /tmp/export_rh_*.csv                               # le fichier exporté : IBAN lisibles`,
-				Verify: "Vous trouvez 3 mots de passe (PostgreSQL, MinIO, RabbitMQ) et le fichier exporté contient des IBAN en clair (FR76…).",
+				Doc: `cat ~/legacy/ingest_legacy.sh                   # lisez le vieux script
+grep -n "PASS\|SECRET\|KEY" ~/legacy/ingest_legacy.sh   # les mots de passe en clair
+bash ~/legacy/ingest_legacy.sh                  # il marche encore !
+head -3 ~/export_rh_*.csv                               # le fichier exporté : IBAN lisibles`,
+				Verify: "Chacun a SA copie du vieux script, avec SON compte PostgreSQL (etl_…) et un mot de passe différent. Vous trouvez 3 mots de passe (PostgreSQL, MinIO, RabbitMQ) et le fichier exporté contient des IBAN en clair (FR76…). ⚠️ Ces mots de passe ont été exposés en clair : on les considère comme compromis. Par la suite, on va les changer (Vault + identifiants temporaires, puis fermeture de l’ancien compte à l’étape 7) : garder en service un ancien mot de passe qui a traîné en clair est une mauvaise pratique de sécurité. 🔒 Dès que l’étape est validée, la console révoque VOTRE mot de passe PostgreSQL : relancez le script après, il échoue.",
 				Run: []string{
-					`sed -n '12,24p' /lab/scripts/legacy/ingest_legacy.sh`,
-					`grep -n "PASS\|SECRET\|KEY" /lab/scripts/legacy/ingest_legacy.sh`,
-					`bash /lab/scripts/legacy/ingest_legacy.sh`,
-					`head -3 /tmp/export_rh_*.csv`,
+					`sed -n '12,24p' ~/legacy/ingest_legacy.sh`,
+					`grep -n "PASS\|SECRET\|KEY" ~/legacy/ingest_legacy.sh`,
+					`bash ~/legacy/ingest_legacy.sh`,
+					`head -3 ~/export_rh_*.csv`,
 				},
-				Expect: []string{`DB_PASS="DataCorp2019!"`, `lignes exportées`, `FR76\d{23}`},
+				Expect: []string{`DB_PASS="[^"]+"`, `lignes exportées`, `FR76\d{23}`},
 			},
 			{
 				ID: "tp1-2", Num: 2, Title: "Ouvrir le coffre-fort", Role: "Samira",
