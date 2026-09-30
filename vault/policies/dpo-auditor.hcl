@@ -29,3 +29,8 @@ path "auth/approle/role/*" {
 path "transit/keys/datacorp-pii" {
   capabilities = ["read"]      # métadonnées de clé : versions, date de rotation (pas la clé)
 }
+
+# Navigation dans l interface web : lister les cles transit pour atteindre datacorp-pii
+path "transit/keys/" {
+  capabilities = ["list"]
+}

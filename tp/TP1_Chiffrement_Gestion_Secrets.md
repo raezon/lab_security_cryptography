@@ -87,6 +87,8 @@ head -3 /tmp/export_rh_*.csv                               # le fichier exporté
 
 ✅ **Vérifier :** Vous trouvez 3 mots de passe (PostgreSQL, MinIO, RabbitMQ) et le fichier exporté contient des IBAN en clair (FR76…).
 
+> ⚠️ **Bonne pratique :** ces mots de passe ont été exposés en clair, on les considère donc comme **compromis**. Par la suite, on va les changer (Vault + identifiants temporaires, puis fermeture de l’ancien compte à l’étape 7) : garder en service un ancien mot de passe qui a traîné en clair est une mauvaise pratique de sécurité.
+
 ### Étape 2 — Ouvrir le coffre-fort
 
 *Samira*

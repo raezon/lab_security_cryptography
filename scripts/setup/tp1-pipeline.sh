@@ -56,6 +56,9 @@ for pair in alice:data-engineer samira:secops claire:dpo-auditor; do
     password="$(vault kv get -field=password "kv/datacorp/users/vault/$u")" >/dev/null
 done
 
+# Espace de l équipe data (visible par alice dans l interface Vault)
+vault kv put kv/datacorp/data-team/pipeline file=ingest.transactions lot=10 environnement=lab >/dev/null
+
 echo "e. Pipeline"
 /lab/scripts/with-vault-creds.sh python3 /lab/pipeline/producer.py 50
 /lab/scripts/with-vault-creds.sh python3 /lab/pipeline/consumer.py

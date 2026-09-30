@@ -34,3 +34,19 @@ path "kv/metadata/datacorp/data-team/*" {
 path "transit/decrypt/*" {
   capabilities = ["deny"]
 }
+
+# Navigation dans l interface web : lister les NOMS des dossiers jusqu a data-team
+# (list sur metadata = noms uniquement, jamais les valeurs des secrets)
+path "kv/metadata/" {
+  capabilities = ["list"]
+}
+path "kv/metadata/datacorp/" {
+  capabilities = ["list"]
+}
+path "kv/metadata/datacorp/data-team/" {
+  capabilities = ["list"]
+}
+# Voir le nom de la cle transit utilisee pour chiffrer (pas la cle elle-meme)
+path "transit/keys/" {
+  capabilities = ["list"]
+}
